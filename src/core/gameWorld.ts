@@ -12,7 +12,8 @@ import { atmosphereFor, buildLevelMeshes } from '../world/voxelBuilder';
 import { setTerrain } from '../world/terrain';
 import { Torches } from '../world/torches';
 import { FlowField } from '../systems/flowField';
-import { inArc } from '../systems/combat';
+import { EXPOSED_MULT, POWER_ELEMENT, affinity, affinityLabel, heightMult, inArc, type Element } from '../systems/combat';
+import { groundAt } from '../world/terrain';
 import { falloffDamage, rollDamage, type AttackStats } from '../systems/damage';
 import { Projectiles, type ProjectileOwner, type ProjectileSpec, type ProjectileTarget } from '../systems/projectiles';
 import { Pickup } from '../entities/pickup';
@@ -154,6 +155,10 @@ export class GameWorld {
             this.events.emit('rise', { x, z });
           },
       allies: () => this.enemies,
+      threats: () => (guest ? [] : this.projectiles.playerShots()),
+      heroes: () => (guest ? [] : this.heroes.filter((p) => p.alive)),
+      hitHero: guest ? () => {} : (source, hero, attack, kx, kz) => this.hitHero(source, hero, attack, kx, kz),
+      remote: guest,
     };
     for (const c of level.chests) {
       const chest = new Chest(c.x, c.z, this.rng.pick([0, Math.PI / 2, Math.PI, -Math.PI / 2]));
@@ -472,8 +477,31 @@ export class GameWorld {
     knockback: number,
     proc = false,
     attacker: Player = this.player,
+    element?: Element,
   ): DamageResult | null {
     const dmg = rollDamage(attack, e.armor, () => this.rng.next());
+    // Tactics: hit them while they're exposed, from higher ground, with what they're weak to.
+    let tag: 'exposed' | 'high' | 'weak' | 'resist' | undefined;
+    let tactical = 1;
+    if (e.exposed) {
+      tactical *= EXPOSED_MULT;
+      tag = 'exposed';
+    }
+    const height = heightMult(groundAt(attacker.pos.x, attacker.pos.z), groundAt(e.pos.x, e.pos.z));
+    if (height !== 1) {
+      tactical *= height;
+      if (height > 1) tag ??= 'high';
+    }
+    if (element) {
+      const aff = affinity(e.affinityKind, element);
+      tactical *= aff;
+      const label = affinityLabel(aff);
+      if (label) {
+        tag = label;
+        this.noteAffinity(e, element, label);
+      }
+    }
+    if (tactical !== 1) dmg.amount = Math.max(1, Math.round(dmg.amount * tactical));
     const dx = e.pos.x - fromX;
     const dz = e.pos.z - fromZ;
     const len = Math.hypot(dx, dz) || 1;
@@ -485,10 +513,17 @@ export class GameWorld {
     }
     if (!e.applyDamage(dmg.amount, (dx / len) * knockback, (dz / len) * knockback)) return null;
     this.calmTime = 0;
-    this.events.emit('hit', { x: e.pos.x, z: e.pos.z, amount: dmg.amount, crit: dmg.crit, target: 'enemy' });
+    this.events.emit('hit', { x: e.pos.x, z: e.pos.z, amount: dmg.amount, crit: dmg.crit, target: 'enemy', ...(tag ? { tag } : {}) });
     if (attacker.stats.lifeOnHit > 0) attacker.heal(attacker.stats.lifeOnHit);
     if (proc) this.triggerPowers(e, dmg, attack, attacker);
     return dmg;
+  }
+
+  /** Tell the player the first time an element finds a monster's weakness or resistance. */
+  private noteAffinity(e: Enemy, element: Element, label: 'weak' | 'resist'): void {
+    if (e.affinitiesSeen.has(element)) return;
+    e.affinitiesSeen.add(element);
+    this.events.emit('affinity', { x: e.pos.x, z: e.pos.z, element, label });
   }
 
   private triggerPowers(target: Enemy, dmg: DamageResult, attack: AttackStats, attacker: Player): void {
@@ -499,16 +534,23 @@ export class GameWorld {
       switch (p.id) {
         case 'ignite': {
           const v = POWER_VALUES.ignite[p.tier];
+          const aff = affinity(target.affinityKind, 'fire');
           target.burnTime = v.duration;
-          target.burnDps = Math.max(target.burnDps, attack.base * attack.power * v.dps);
+          target.burnDps = Math.max(target.burnDps, attack.base * attack.power * v.dps * aff);
+          const label = affinityLabel(aff);
+          if (label) this.noteAffinity(target, 'fire', label);
           break;
         }
         case 'frost': {
           const v = POWER_VALUES.frost[p.tier];
-          target.chillTime = v.duration;
-          // Bosses are only slowed a little and can't be frozen.
-          target.chillSlow = target.isBoss ? Math.max(v.slow, 0.75) : v.slow;
-          if (!target.isBoss && target.alive && target.freezeTime <= 0 && rng.chance(v.freezeChance)) {
+          const aff = affinity(target.affinityKind, 'frost');
+          const label = affinityLabel(aff);
+          if (label) this.noteAffinity(target, 'frost', label);
+          target.chillTime = v.duration * Math.min(1.5, aff);
+          // Weak targets slow more, resistant ones less. Bosses are only slowed a little and can't be frozen.
+          const slow = Math.min(0.95, Math.max(0.15, 1 - (1 - v.slow) * aff));
+          target.chillSlow = target.isBoss ? Math.max(slow, 0.75) : slow;
+          if (!target.isBoss && target.alive && target.freezeTime <= 0 && rng.chance(v.freezeChance * aff)) {
             target.freezeTime = v.freeze;
             events.emit('power', { id: 'frost', ...at });
           }
@@ -534,7 +576,7 @@ export class GameWorld {
             if (!next) break;
             struck.add(next);
             points.push({ x: next.pos.x, z: next.pos.z });
-            this.damageEnemy(next, scaled(v.damage), from.pos.x, from.pos.z, 2);
+            this.damageEnemy(next, scaled(v.damage), from.pos.x, from.pos.z, 2, false, attacker, POWER_ELEMENT.chain);
             from = next;
           }
           if (points.length > 1) events.emit('power', { id: 'chain', ...at, points });
@@ -545,14 +587,14 @@ export class GameWorld {
           if (++this.shockCount < v.every) break;
           this.shockCount = 0;
           events.emit('power', { id: 'shockwave', ...at, radius: v.radius });
-          this.damageArea(at.x, at.z, v.radius, scaled(v.damage), null);
+          this.damageArea(at.x, at.z, v.radius, scaled(v.damage), null, attacker, POWER_ELEMENT.shockwave);
           break;
         }
         case 'detonate': {
           if (!dmg.crit) break;
           const v = POWER_VALUES.detonate[p.tier];
           events.emit('power', { id: 'detonate', ...at, radius: v.radius });
-          this.damageArea(at.x, at.z, v.radius, scaled(v.damage), target);
+          this.damageArea(at.x, at.z, v.radius, scaled(v.damage), target, attacker, POWER_ELEMENT.detonate);
           break;
         }
       }
@@ -560,11 +602,11 @@ export class GameWorld {
   }
 
   /** Player-side area damage (powers). Never triggers further powers. */
-  private damageArea(x: number, z: number, radius: number, attack: AttackStats, exclude: Enemy | null): void {
+  private damageArea(x: number, z: number, radius: number, attack: AttackStats, exclude: Enemy | null, attacker: Player, element: Element): void {
     for (const e of this.enemies) {
       if (e === exclude || !e.alive) continue;
       if (Math.hypot(e.pos.x - x, e.pos.z - z) > radius + e.radius) continue;
-      this.damageEnemy(e, attack, x, z, 6);
+      this.damageEnemy(e, attack, x, z, 6, false, attacker, element);
     }
   }
 
@@ -755,9 +797,20 @@ export class GameWorld {
     }
   }
 
+  /** A boss hazard (or any explicit hit) on a given hero, with knockback (kx, kz). */
+  private hitHero(source: Enemy, hero: Player, attack: AttackStats, kx: number, kz: number): void {
+    const dmg = rollDamage(attack, hero.armor, () => this.rng.next());
+    dmg.amount = Math.max(1, Math.round(dmg.amount * heightMult(groundAt(source.pos.x, source.pos.z), groundAt(hero.pos.x, hero.pos.z))));
+    if (!hero.applyDamage(dmg.amount, kx, kz)) return;
+    if (hero === this.player) this.calmTime = 0;
+    this.events.emit('hit', { x: hero.pos.x, z: hero.pos.z, amount: dmg.amount, crit: dmg.crit, target: 'player', who: this.heroId(hero) });
+  }
+
   private hitPlayer(source: Enemy, attack: AttackStats, knockback: number): void {
     const player = this.ctx.player;
     const dmg = rollDamage(attack, player.armor, () => this.rng.next());
+    // Monsters striking down from a ledge hit harder; striking up, softer.
+    dmg.amount = Math.max(1, Math.round(dmg.amount * heightMult(groundAt(source.pos.x, source.pos.z), groundAt(player.pos.x, player.pos.z))));
     const dx = player.pos.x - source.pos.x;
     const dz = player.pos.z - source.pos.z;
     const len = Math.hypot(dx, dz) || 1;

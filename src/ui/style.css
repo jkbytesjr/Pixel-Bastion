@@ -1867,3 +1867,95 @@ body {
 .name-tag.down {
   color: #ff8a6a;
 }
+
+/* ---- Tactics: stamina, high ground, tactical damage numbers ---- */
+
+.stamina-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+.stamina-bar {
+  position: relative;
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.12);
+  overflow: hidden;
+}
+
+.stamina-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #9be34a, #d8f06a);
+  transition: width 0.08s linear;
+}
+
+.stamina-fill.low {
+  background: #8a8a4a;
+}
+
+/* Marks at each roll's worth of stamina. */
+.stamina-bar i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgb(0 0 0 / 0.6);
+}
+
+.stamina-bar i:nth-of-type(1) {
+  left: 34%;
+}
+
+.stamina-bar i:nth-of-type(2) {
+  left: 68%;
+}
+
+.high-ground {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffd23f;
+  white-space: nowrap;
+}
+
+.dmg.exposed {
+  font-size: 22px;
+  color: #ffe14a;
+  text-shadow:
+    0 0 6px rgb(255 210 63 / 0.8),
+    0 2px 2px #000;
+}
+
+.dmg.weak {
+  font-size: 21px;
+  color: #ff9a3c;
+}
+
+.dmg.resist {
+  font-size: 14px;
+  color: #9aa0a8;
+}
+
+.dmg.note {
+  font-size: 13px;
+  color: #fff2b0;
+  letter-spacing: 0.04em;
+}
+
+/* Boss bar by phase: enraged, then desperate. */
+.boss-bar.phase2 .boss-fill {
+  background: linear-gradient(90deg, #b8301a, #ff6a2a);
+}
+
+.boss-bar.phase3 .boss-fill {
+  background: linear-gradient(90deg, #8a0a3a, #ff2a6a);
+  animation: boss-desperate 0.8s ease-in-out infinite;
+}
+
+@keyframes boss-desperate {
+  50% {
+    filter: brightness(1.5);
+  }
+}

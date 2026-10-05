@@ -26,6 +26,14 @@ export interface EnemyContext {
   spawnEnemy(kind: EnemyKind, x: number, z: number): void;
   /** Every enemy on the floor (for healers). */
   allies(): readonly Enemy[];
+  /** Every living hero (empty on co-op guests: their copies of monsters deal no damage). */
+  heroes(): readonly Player[];
+  /** Resolve a monster's attack against a particular hero (boss hazards). */
+  hitHero(source: Enemy, hero: Player, attack: AttackStats, knockX: number, knockZ: number): void;
+  /** True on co-op guests: this copy of the monster only acts out the host's fight. */
+  remote: boolean;
+  /** Heroes' arrows and spears in flight (for monsters that sidestep them). */
+  threats(): readonly { x: number; z: number; dirX: number; dirZ: number }[];
   events: EventBus;
 }
 
@@ -34,6 +42,8 @@ const DEATH_TIME = 0.95;
 const RISE_TIME = 0.7;
 
 const tintCache = new Map<string, THREE.MeshLambertMaterial>();
+const exposedGeo = new THREE.OctahedronGeometry(0.16);
+const exposedMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffd23f).multiplyScalar(1.6) });
 
 const eliteRingMat = new THREE.MeshBasicMaterial({ color: 0xffc23a, transparent: true, opacity: 0.55, depthWrite: false });
 
@@ -76,6 +86,10 @@ export abstract class Enemy extends Actor {
   protected moveSpeed = 3;
   protected readonly motion = new BodyMotion();
   private riseTimer = 0;
+  /** Seconds left of an exposed window (just attacked, off balance): takes extra damage. */
+  private exposedTime = 0;
+  /** Yellow marker over the head while exposed. */
+  private readonly exposedMark: THREE.Mesh;
   /** Last knockback received, to pick which way the body falls. */
   private readonly lastKnock = { x: 0, z: 0 };
   private fallDir = -1;
@@ -87,6 +101,11 @@ export abstract class Enemy extends Actor {
     super(maxHp);
     this.model = model;
     this.healthBar = new HealthBar(barHeight);
+    this.exposedMark = new THREE.Mesh(exposedGeo, exposedMat);
+    this.exposedMark.position.y = barHeight + 0.35;
+    this.exposedMark.visible = false;
+    this.exposedMark.userData.noFlash = true;
+    model.root.add(this.exposedMark);
   }
 
   private compacted = false;
@@ -115,6 +134,12 @@ export abstract class Enemy extends Actor {
 
   update(dt: number, ctx: EnemyContext, camera: THREE.Camera): void {
     this.tickCommon(dt, ctx.grid);
+    this.exposedTime = Math.max(0, this.exposedTime - dt);
+    this.exposedMark.visible = this.exposedTime > 0 && this.alive;
+    if (this.exposedMark.visible) {
+      this.exposedMark.rotation.y += dt * 4;
+      this.exposedMark.scale.setScalar(1 + Math.sin(this.exposedTime * 18) * 0.15);
+    }
     let rootY = 0;
     if (this.alive) {
       this.chillTime = Math.max(0, this.chillTime - dt);
@@ -202,6 +227,23 @@ export abstract class Enemy extends Actor {
     this.model.body.position.y = this.model.bodyBaseY;
   }
 
+  /** Open an exposed window: hits land harder (EXPOSED_MULT) for `seconds`. */
+  protected expose(seconds: number): void {
+    this.exposedTime = Math.max(this.exposedTime, seconds);
+  }
+
+  get exposed(): boolean {
+    return this.exposedTime > 0 && this.alive;
+  }
+
+  /** Elements whose weakness / resistance the player has already been told about. */
+  readonly affinitiesSeen = new Set<string>();
+
+  /** Kind used for elemental affinities (bosses use their boss kind). */
+  get affinityKind(): string {
+    return this.kind;
+  }
+
   /** Turn into an elite: more health and damage, bigger, ringed in gold. */
   makeElite(): void {
     if (this.elite) return;
@@ -266,6 +308,81 @@ export abstract class Enemy extends Actor {
   protected canSeePlayer(ctx: EnemyContext, range: number): boolean {
     const p = ctx.player;
     return p.alive && this.distanceToPlayer(ctx) < range && ctx.grid.lineOfSight(this.pos.x, this.pos.z, p.pos.x, p.pos.z);
+  }
+
+  /** Close-combat monster: takes part in surrounding the hero. */
+  protected melee = false;
+  /** This monster's place in the ring around its target. */
+  private readonly flankAngle = Math.random() * Math.PI * 2;
+  private evadeTime = 0;
+  private evadeDir = 1;
+  private evadeCooldown = 0;
+  private flankClock = 0;
+
+  get isMelee(): boolean {
+    return this.melee && this.alive;
+  }
+
+  /**
+   * Close in like a pack: from range, path to the hero; up close, take a
+   * spot around them instead of queueing behind each other. When three or
+   * more are already on the hero, the rest hold back in a wider ring and
+   * wait for an opening. Returns whether it moved.
+   */
+  protected flankToward(ctx: EnemyContext, dt: number, speed: number, attackRange: number): boolean {
+    const p = ctx.player;
+    const dist = this.distanceToPlayer(ctx);
+    this.flankClock += dt;
+    if (dist > 5 || !ctx.grid.lineOfSight(this.pos.x, this.pos.z, p.pos.x, p.pos.z)) return this.moveToward(ctx, dt, speed);
+    let crowd = 0;
+    for (const a of ctx.allies()) {
+      if (a === this || !a.isMelee) continue;
+      if (Math.hypot(a.pos.x - p.pos.x, a.pos.z - p.pos.z) < attackRange + 0.9) crowd++;
+    }
+    const waiting = crowd >= 3 && dist > attackRange + 0.5;
+    const ring = waiting ? attackRange + 2.2 : attackRange * 0.75;
+    // Slowly rotate the spot so a waiting ring keeps shifting around the hero.
+    const a = this.flankAngle + (waiting ? this.flankClock * 0.3 : 0);
+    const tx = p.pos.x + Math.sin(a) * ring;
+    const tz = p.pos.z + Math.cos(a) * ring;
+    if (!ctx.grid.isWalkableAt(tx, tz) || !ctx.grid.lineOfSight(this.pos.x, this.pos.z, tx, tz)) return this.moveToward(ctx, dt, speed);
+    const dx = tx - this.pos.x;
+    const dz = tz - this.pos.z;
+    const len = Math.hypot(dx, dz);
+    this.turnToward(this.angleToPlayer(ctx), 8, dt);
+    if (len < 0.2) return false;
+    const step = Math.min(len, speed * dt * (waiting ? 0.6 : 1));
+    ctx.grid.moveBox(this.pos, (dx / len) * step, (dz / len) * step, this.radius);
+    return true;
+  }
+
+  /**
+   * Ranged and agile monsters sidestep arrows and spears flying at them,
+   * though not every time and not twice in a row. Returns true while sidestepping.
+   */
+  protected evadeShots(ctx: EnemyContext, dt: number, speed: number): boolean {
+    this.evadeCooldown -= dt;
+    if (this.evadeTime > 0) {
+      this.evadeTime -= dt;
+      const a = this.angleToPlayer(ctx) + (Math.PI / 2) * this.evadeDir;
+      ctx.grid.moveBox(this.pos, Math.sin(a) * speed * 1.8 * dt, Math.cos(a) * speed * 1.8 * dt, this.radius);
+      return true;
+    }
+    if (this.evadeCooldown > 0) return false;
+    for (const t of ctx.threats()) {
+      const rx = this.pos.x - t.x;
+      const rz = this.pos.z - t.z;
+      const along = rx * t.dirX + rz * t.dirZ;
+      if (along < 0 || along > 4.5) continue;
+      const across = rx * t.dirZ - rz * t.dirX;
+      if (Math.abs(across) > this.radius + 0.6) continue;
+      this.evadeCooldown = 1.6;
+      if (!ctx.rng.chance(0.65)) return false;
+      this.evadeDir = across >= 0 ? -1 : 1;
+      this.evadeTime = 0.3;
+      return true;
+    }
+    return false;
   }
 
   /** Sidestep perpendicular to the player (kiting). */

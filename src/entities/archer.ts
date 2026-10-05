@@ -67,6 +67,10 @@ export class Archer extends Enemy {
       case 'move': {
         if (!ctx.player.alive) return this.enter('idle');
         let moved = true;
+        if (this.evadeShots(ctx, dt, SPEED)) {
+          this.animateWalk(dt, true);
+          break;
+        }
         if (dist < MIN_RANGE) moved = this.moveToward(ctx, dt, SPEED, true);
         else if (dist > MAX_RANGE || !sees) moved = this.moveToward(ctx, dt, SPEED);
         else {
@@ -136,6 +140,8 @@ export class Archer extends Enemy {
   }
 
   private enter(state: State): void {
+    // Off balance after attacking: a window to punish.
+    if (state === 'release') this.expose(0.5);
     this.state = state;
     this.stateTime = 0;
   }

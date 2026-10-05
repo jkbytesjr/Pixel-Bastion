@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Enemy, type EnemyContext } from './enemy';
 import { limb, voxelBox, type HumanoidParts } from './voxelModel';
 import { ease, span } from './animation';
+import { angleDiff } from '../systems/combat';
 
 type State = 'idle' | 'chase' | 'crouch' | 'lunge' | 'recover';
 
@@ -76,10 +77,15 @@ export class Spider extends Enemy {
   readonly xp = 6;
   readonly radius = 0.28;
   protected moveSpeed = SPEED;
+  protected melee = true;
+  /** Seconds spent circling, waiting for an opening. */
+  private stalk = 0;
   private state: State = 'idle';
   private stateTime = 0;
   private hitDone = false;
   private readonly lungeDir = { x: 0, z: 0 };
+  /** Which way it circles while stalking. */
+  private readonly flankSide = Math.random() < 0.5 ? 1 : -1;
 
   constructor() {
     super(14, buildSpider(0x3a3044, 0.9), 1.0);
@@ -96,9 +102,26 @@ export class Spider extends Enemy {
         break;
       case 'chase': {
         if (!ctx.player.alive) return this.enter('idle');
-        const moved = this.moveToward(ctx, dt, SPEED);
+        if (dist < LUNGE_RANGE + 1 && this.canSeePlayer(ctx, LUNGE_RANGE + 1.5)) {
+          // Circle just out of reach and pounce on an opening: the hero busy attacking or
+          // looking the other way (or after waiting long enough).
+          const p = ctx.player;
+          const facingAway = Math.abs(angleDiff(p.facing, Math.atan2(this.pos.x - p.pos.x, this.pos.z - p.pos.z))) > 1.3;
+          this.stalk += dt;
+          if ((p.busy || facingAway || this.stalk > 1.6) && dist < LUNGE_RANGE) {
+            this.stalk = 0;
+            this.enter('crouch');
+            break;
+          }
+          this.strafe(ctx, dt, SPEED * 0.55, this.flankSide);
+          if (dist < LUNGE_RANGE - 0.8) this.moveToward(ctx, dt, SPEED * 0.4, true);
+          this.turnToward(this.angleToPlayer(ctx), 10, dt);
+          this.animateWalk(dt, true, 20);
+          break;
+        }
+        this.stalk = 0;
+        const moved = this.flankToward(ctx, dt, SPEED, LUNGE_RANGE);
         this.animateWalk(dt, moved, 22);
-        if (dist < LUNGE_RANGE && this.canSeePlayer(ctx, LUNGE_RANGE + 0.5)) this.enter('crouch');
         break;
       }
       case 'crouch': {
@@ -151,6 +174,8 @@ export class Spider extends Enemy {
   }
 
   private enter(state: State): void {
+    // Off balance after attacking: a window to punish.
+    if (state === 'recover') this.expose(0.5);
     this.state = state;
     this.stateTime = 0;
   }

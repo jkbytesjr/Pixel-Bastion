@@ -89,6 +89,10 @@ export class Shaman extends Enemy {
         break;
       case 'move': {
         if (!ctx.player.alive) return this.enter('idle');
+        if (this.evadeShots(ctx, dt, SPEED)) {
+          this.animateWalk(dt, true, 8);
+          break;
+        }
         let moved = true;
         if (dist < MIN_RANGE) moved = this.moveToward(ctx, dt, SPEED, true);
         else if (dist > MAX_RANGE || !sees) moved = this.moveToward(ctx, dt, SPEED);
@@ -179,6 +183,8 @@ export class Shaman extends Enemy {
   }
 
   private enter(state: State): void {
+    // Off balance after attacking: a window to punish.
+    if (state === 'recover') this.expose(0.5);
     if (state !== 'channel') this.healRing.visible = false;
     this.state = state;
     this.stateTime = 0;

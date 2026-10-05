@@ -44,7 +44,7 @@ export class DamageNumbers {
   }
 
   /** `kind` picks the style: enemy damage, crit, damage taken, or healing. */
-  spawn(x: number, y: number, z: number, text: string, kind: 'hit' | 'crit' | 'hurt' | 'heal' | 'burn'): void {
+  spawn(x: number, y: number, z: number, text: string, kind: 'hit' | 'crit' | 'hurt' | 'heal' | 'burn' | 'weak' | 'resist' | 'exposed' | 'note'): void {
     // Round-robin: when the pool is exhausted the oldest number is reused.
     const n = this.nums[this.next];
     this.next = (this.next + 1) % POOL;

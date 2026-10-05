@@ -6,11 +6,23 @@ export interface GameEvents {
   /** `who`: the player behind it (co-op), so each player's own effects aren't played twice. */
   swing: { x: number; z: number; who?: number };
   shoot: { x: number; z: number; owner: 'player' | 'enemy' };
-  hit: { x: number; z: number; amount: number; crit: boolean; target: 'enemy' | 'player'; who?: number };
+  /**
+   * `tag` marks why a hit landed harder or softer: an exposed enemy, high
+   * ground, or an elemental weakness / resistance.
+   */
+  hit: { x: number; z: number; amount: number; crit: boolean; target: 'enemy' | 'player'; who?: number; tag?: 'exposed' | 'high' | 'weak' | 'resist' };
+  /** First time an element finds a monster's weakness or resistance. */
+  affinity: { x: number; z: number; element: string; label: 'weak' | 'resist' };
   enemyDied: { x: number; z: number; kind: string; xp: number };
   explosion: { x: number; z: number; radius: number };
   bossEngaged: { name: string };
   bossDefeated: { x: number; z: number; name: string };
+  /** A boss entered a harder phase (2: enraged, 3: desperate). */
+  bossPhase: { name: string; phase: number };
+  /** A boss hazard was placed (co-op guests draw the host's). */
+  hazard: { spec: import('../entities/bossHazards').HazardSpec };
+  /** A boss hazard went off. */
+  bossStrike: { x: number; z: number; radius: number; boss: string };
   /** `admin`: thrown in admin armor, which gets its own effects. */
   slam: { x: number; z: number; radius: number; admin?: boolean; who?: number };
   /** Spear volley thrown (E). */

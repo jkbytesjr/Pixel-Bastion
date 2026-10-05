@@ -79,7 +79,10 @@ export class RemotePlayer extends Player {
     const moving = dist > 0.12;
     // Clear cooldowns so a reported action always plays, whatever this copy's timers say.
     if (this.pending.strike) this.attackCooldown = 0;
-    if (this.pending.dodge) this.dodgeCooldown = 0;
+    if (this.pending.dodge) {
+      this.dodgeCooldown = 0;
+      this.stamina.value = 100;
+    }
     if (this.pending.slam) this.slamCooldown = 0;
     if (this.pending.volley) this.volleyCooldown = 0;
     const input: PlayerInput = {

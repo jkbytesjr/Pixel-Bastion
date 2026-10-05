@@ -27,6 +27,9 @@ export class Shieldbearer extends Enemy {
   private state: State = 'idle';
   private stateTime = 0;
   private hitDone = false;
+  /** Seconds of a fast turn after being hit from behind. */
+  private brace = 0;
+  protected melee = true;
 
   constructor() {
     super(
@@ -76,7 +79,9 @@ export class Shieldbearer extends Enemy {
         if (!ctx.player.alive) return this.enter('idle');
         // Turns slowly: circle around it to get past the shield.
         const moved = dist > BASH_RANGE * 0.8 ? this.moveToward(ctx, dt, SPEED) : false;
-        this.turnToward(this.angleToPlayer(ctx), 2.2, dt);
+        // Turns slowly, unless it was just struck from behind and spins to face it.
+        this.brace = Math.max(0, this.brace - dt);
+        this.turnToward(this.angleToPlayer(ctx), this.brace > 0 ? 7 : 2.2, dt);
         this.animateWalk(dt, moved, 7);
         // Shield held up in front while walking.
         armL.rotation.x = -1.1;
@@ -138,12 +143,17 @@ export class Shieldbearer extends Enemy {
   }
 
   applyDamage(amount: number, knockX: number, knockZ: number): boolean {
+    // Knocked forward means the blow came from behind: brace and turn.
+    const fwd = knockX * Math.sin(this.facing) + knockZ * Math.cos(this.facing);
+    if (fwd > 0.5) this.brace = 1.2;
     const hit = super.applyDamage(amount, knockX, knockZ);
     if (hit && this.state === 'idle') this.enter('advance');
     return hit;
   }
 
   private enter(state: State): void {
+    // Off balance after attacking: a window to punish.
+    if (state === 'recover') this.expose(0.85);
     this.state = state;
     this.stateTime = 0;
   }

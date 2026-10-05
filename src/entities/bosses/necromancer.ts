@@ -63,6 +63,40 @@ export class Necromancer extends Boss {
     });
     this.ringMark = groundCircle();
     this.model.root.add(this.ringMark);
+    this.powers.push(
+      {
+        // Bones burst up in a ring around his target with one gap, then the middle: find the way out.
+        name: 'Bone Prison',
+        cooldown: 9,
+        minPhase: 1,
+        cast: 0.8,
+        timer: 3,
+        run: (ctx) => {
+          const p = ctx.player;
+          const gap = ctx.rng.int(0, 7);
+          for (let i = 0; i < 8; i++) {
+            if (i === gap) continue;
+            const a = (i / 8) * Math.PI * 2;
+            const x = p.pos.x + Math.sin(a) * 2.4;
+            const z = p.pos.z + Math.cos(a) * 2.4;
+            if (ctx.grid.isWalkableAt(x, z)) this.hazard(ctx, { k: 'circle', x, z, r: 1.1, delay: 1.3, base: 16, knock: 4 });
+          }
+          this.hazard(ctx, { k: 'circle', x: p.pos.x, z: p.pos.z, r: 1.4, delay: 1.9, base: 22, knock: 6 });
+        },
+      },
+      {
+        // Enraged: a death wave rolls out and a spiral of bolts follows it.
+        name: 'Death Spiral',
+        cooldown: 11,
+        minPhase: 2,
+        cast: 1.0,
+        timer: 2,
+        run: (ctx) => {
+          this.hazard(ctx, { k: 'ring', x: this.pos.x, z: this.pos.z, r: 10, speed: 7, delay: 0.4, base: 16, knock: 7 });
+          for (let i = 0; i < 20; i++) this.shoot(ctx, this.facing + (i / 20) * Math.PI * 2, { speed: 6 + (i % 2) * 2, range: 14, base: 9, color: 0xa070ff, orb: true });
+        },
+      },
+    );
   }
 
   protected fight(dt: number, ctx: EnemyContext): void {
@@ -87,6 +121,10 @@ export class Necromancer extends Boss {
           break;
         }
         if (this.attackCooldown > 0) break;
+        if (this.tryPower(ctx)) {
+          this.attackCooldown = 1;
+          break;
+        }
         if (this.summonTimer <= 0) this.enter('summon');
         else if (ctx.rng.chance(0.5)) {
           this.volleysLeft = 3;
@@ -183,6 +221,8 @@ export class Necromancer extends Boss {
   }
 
   private recover(time: number): void {
+    // The recovery after every attack is the boss's vulnerable window.
+    this.expose(time);
     this.recoverTime = time;
     this.attackCooldown = this.enraged ? 0.6 : 1.1;
     this.enter('recover');

@@ -83,6 +83,11 @@ export class Projectiles {
     for (const p of this.list) if (p.trail !== undefined) yield { x: p.x, z: p.z, color: p.trail };
   }
 
+  /** Heroes' shots in flight (monsters that dodge look at these). */
+  playerShots(): { x: number; z: number; dirX: number; dirZ: number }[] {
+    return this.list.filter((p) => p.owner === 'player');
+  }
+
   /** Everything in flight, for co-op snapshots. */
   toNet(): import('../net/protocol').ProjectileState[] {
     const r = (v: number) => Math.round(v * 100) / 100;

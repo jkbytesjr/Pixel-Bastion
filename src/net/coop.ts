@@ -45,6 +45,10 @@ const FORWARDED: (keyof GameEvents)[] = [
   'burnTick',
   'status',
   'chestOpened',
+  'affinity',
+  'hazard',
+  'bossStrike',
+  'bossPhase',
 ];
 
 /** What the session needs from the game. */

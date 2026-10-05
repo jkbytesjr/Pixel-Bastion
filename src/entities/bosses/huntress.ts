@@ -66,6 +66,50 @@ export class Huntress extends Boss {
     this.fanCone.position.y = 0.03;
     this.fanCone.visible = false;
     this.model.root.add(this.fanCone);
+    this.powers.push(
+      {
+        // A volley falls around every hero: marked circles, a moment to step clear.
+        name: 'Arrow Rain',
+        cooldown: 7,
+        minPhase: 1,
+        cast: 0.7,
+        timer: 2.5,
+        run: (ctx) => {
+          for (const h of this.heroTargets(ctx)) {
+            this.hazard(ctx, { k: 'circle', x: h.pos.x, z: h.pos.z, r: 1.4, delay: 1.0, base: 14, knock: 4 });
+            for (let i = 0; i < 5; i++) {
+              const a = ctx.rng.range(0, Math.PI * 2);
+              const d = ctx.rng.range(1.5, 3.5);
+              const x = h.pos.x + Math.sin(a) * d;
+              const z = h.pos.z + Math.cos(a) * d;
+              if (ctx.grid.isWalkableAt(x, z)) this.hazard(ctx, { k: 'circle', x, z, r: 1.4, delay: 1.1 + i * 0.12, base: 14, knock: 4 });
+            }
+          }
+        },
+      },
+      {
+        // Enraged: vanishes and reappears behind her target, a spinning slash marked around her.
+        name: 'Shadow Step',
+        cooldown: 9,
+        minPhase: 2,
+        cast: 0.5,
+        timer: 1.5,
+        run: (ctx) => {
+          const p = ctx.player;
+          let x = p.pos.x - Math.sin(p.facing) * 1.8;
+          let z = p.pos.z - Math.cos(p.facing) * 1.8;
+          if (!ctx.grid.isWalkableAt(x, z)) {
+            x = p.pos.x;
+            z = p.pos.z;
+          }
+          ctx.events.emit('teleport', { ...this.pos });
+          this.setPosition(x, z);
+          this.facing = Math.atan2(p.pos.x - x, p.pos.z - z);
+          ctx.events.emit('teleport', { x, z });
+          this.hazard(ctx, { k: 'circle', x, z, r: 2.2, delay: 0.9, base: 24, knock: 8 });
+        },
+      },
+    );
   }
 
   protected fight(dt: number, ctx: EnemyContext): void {
@@ -92,7 +136,8 @@ export class Huntress extends Boss {
         this.model.armL.rotation.x = -0.6;
         if (dist < 3.2 && this.dashCooldown <= 0) this.startDash(ctx);
         else if (this.attackCooldown <= 0 && sees) {
-          if (ctx.rng.chance(0.55)) this.enter('fanAim');
+          if (this.tryPower(ctx)) this.attackCooldown = 1;
+          else if (ctx.rng.chance(0.55)) this.enter('fanAim');
           else {
             this.shotsLeft = this.enraged ? 5 : 3;
             this.enter('rapid');
@@ -160,6 +205,8 @@ export class Huntress extends Boss {
   }
 
   private recover(time: number): void {
+    // The recovery after every attack is the boss's vulnerable window.
+    this.expose(time);
     this.recoverTime = time;
     this.attackCooldown = this.enraged ? 0.7 : 1.3;
     this.enter('recover');

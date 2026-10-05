@@ -18,6 +18,7 @@ export class Grunt extends Enemy {
   readonly xp = 12;
   readonly radius = 0.35;
   protected moveSpeed = SPEED;
+  protected melee = true;
   private state: State = 'idle';
   private stateTime = 0;
 
@@ -66,7 +67,20 @@ export class Grunt extends Enemy {
           this.enter('windup');
           break;
         }
-        const moved = this.moveToward(ctx, dt, SPEED);
+        // Badly hurt with a healer nearby: fall back to it and get patched up.
+        const healer = this.hp < this.maxHp * 0.3 ? this.nearestHealer(ctx) : null;
+        if (healer) {
+          const hx = healer.pos.x - this.pos.x;
+          const hz = healer.pos.z - this.pos.z;
+          const hd = Math.hypot(hx, hz);
+          if (hd > 2) {
+            ctx.grid.moveBox(this.pos, (hx / hd) * SPEED * dt, (hz / hd) * SPEED * dt, this.radius);
+            this.turnToward(Math.atan2(hx, hz), 8, dt);
+          }
+          this.animateWalk(dt, hd > 2);
+          break;
+        }
+        const moved = this.flankToward(ctx, dt, SPEED, ATTACK_RANGE);
         this.animateWalk(dt, moved);
         break;
       }
@@ -123,6 +137,21 @@ export class Grunt extends Enemy {
     }
   }
 
+  /** A living shaman within reach to fall back to. */
+  private nearestHealer(ctx: EnemyContext): Enemy | null {
+    let best: Enemy | null = null;
+    let bestD = 14;
+    for (const a of ctx.allies()) {
+      if (a.kind !== 'shaman' || !a.alive) continue;
+      const d = Math.hypot(a.pos.x - this.pos.x, a.pos.z - this.pos.z);
+      if (d < bestD) {
+        bestD = d;
+        best = a;
+      }
+    }
+    return best;
+  }
+
   /** Taking damage always wakes it up. */
   applyDamage(amount: number, knockX: number, knockZ: number): boolean {
     const hit = super.applyDamage(amount, knockX, knockZ);
@@ -131,6 +160,8 @@ export class Grunt extends Enemy {
   }
 
   private enter(state: State): void {
+    // Off balance after attacking: a window to punish.
+    if (state === 'recover') this.expose(0.7);
     this.state = state;
     this.stateTime = 0;
   }

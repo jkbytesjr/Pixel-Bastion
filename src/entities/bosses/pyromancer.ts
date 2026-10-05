@@ -75,6 +75,39 @@ export class Pyromancer extends Boss {
     }
     this.novaRing = groundCircle();
     this.model.root.add(this.novaRing);
+    this.powers.push(
+      {
+        // Three lanes of fire erupt toward his target: stand between them.
+        name: 'Flame Walls',
+        cooldown: 8,
+        minPhase: 1,
+        cast: 0.8,
+        timer: 3,
+        run: (ctx) => {
+          const a = this.angleToPlayer(ctx);
+          for (const off of [-0.45, 0, 0.45]) this.hazard(ctx, { k: 'lane', x: this.pos.x, z: this.pos.z, a: a + off, len: 13, w: 1.5, delay: 1.1, base: 20, knock: 6 });
+        },
+      },
+      {
+        // Enraged: calls down a meteor on every hero, with embers scattering after.
+        name: 'Meteor',
+        cooldown: 12,
+        minPhase: 2,
+        cast: 1.2,
+        timer: 2,
+        run: (ctx) => {
+          for (const h of this.heroTargets(ctx)) {
+            this.hazard(ctx, { k: 'circle', x: h.pos.x, z: h.pos.z, r: 3.2, delay: 1.9, base: 38, knock: 12 });
+            for (let i = 0; i < 4; i++) {
+              const a = (i / 4) * Math.PI * 2 + 0.4;
+              const x = h.pos.x + Math.sin(a) * 4;
+              const z = h.pos.z + Math.cos(a) * 4;
+              if (ctx.grid.isWalkableAt(x, z)) this.hazard(ctx, { k: 'circle', x, z, r: 1.2, delay: 2.3, base: 14, knock: 4 });
+            }
+          }
+        },
+      },
+    );
   }
 
   protected fight(dt: number, ctx: EnemyContext): void {
@@ -92,6 +125,10 @@ export class Pyromancer extends Boss {
         this.turnToward(this.angleToPlayer(ctx), 5, dt);
         this.animateWalk(dt, moved, 6);
         if (this.attackCooldown > 0) break;
+        if (this.tryPower(ctx)) {
+          this.attackCooldown = 1;
+          break;
+        }
         if (this.enraged && this.summonTimer <= 0) this.enter('summon');
         else if (dist < 3.4) this.enter('novaWindup');
         else if (dist < 15) this.startBombs(ctx);
@@ -171,6 +208,8 @@ export class Pyromancer extends Boss {
   }
 
   private recover(time: number): void {
+    // The recovery after every attack is the boss's vulnerable window.
+    this.expose(time);
     this.recoverTime = time;
     this.attackCooldown = this.enraged ? 0.5 : 1.0;
     this.enter('recover');

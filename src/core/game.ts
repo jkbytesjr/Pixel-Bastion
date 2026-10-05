@@ -352,7 +352,9 @@ export class Game {
         fx.burst(e.x, 1, e.z, { count: 8, color: 0xc0262b, speed: [1, 3] });
       } else {
         if (e.crit) rig.shake(0.15, 0.12);
-        nums.spawn(e.x, 1.9, e.z, `${DamageNumbers.format(e.amount)}${e.crit ? '!' : ''}`, e.crit ? 'crit' : 'hit');
+        // Tactical hits get their own colour: exposed, weak to the element, resisted.
+        const style = e.tag === 'exposed' || e.tag === 'weak' || e.tag === 'resist' ? e.tag : e.crit ? 'crit' : 'hit';
+        nums.spawn(e.x, 1.9, e.z, `${DamageNumbers.format(e.amount)}${e.crit ? '!' : ''}${e.tag === 'high' ? ' ▲' : ''}`, style);
         fx.burst(e.x, 0.9, e.z, { count: e.crit ? 14 : 7, color: 0x9b1d1d, color2: e.crit ? 0xffd23f : 0xd8463c, speed: [1.5, 4] });
       }
       sfx.hit(e.target, e.crit);
@@ -508,6 +510,26 @@ export class Game {
     events.on('chestOpened', (e) => {
       fx.burst(e.x, 0.7, e.z, { count: 30, color: 0xf2c14e, color2: 0xfff2b0, speed: [0.5, 2.5], up: [3, 7] });
       sfx.chest();
+    });
+    events.on('bossPhase', (e) => {
+      hud.toast(e.phase === 3 ? `${e.name} is desperate!` : `${e.name} is enraged!`, 'danger');
+      rig.shake(0.6, 0.5);
+      sfx.bossEngaged();
+    });
+    events.on('bossStrike', (e) => {
+      const [a, b] = ({ colossus: [0xb8ad94, 0xff8a2a], huntress: [0x7ad46a, 0xd8f0a0], pyromancer: [0xff6a1a, 0xffd23f], necromancer: [0xa070ff, 0x6a3aaa] } as Record<string, [number, number]>)[e.boss] ?? [0xff6a3a, 0xffd23f];
+      fx.burst(e.x, 0.3, e.z, { count: Math.round(12 + e.radius * 8), color: a, color2: b, speed: [1, 2 + e.radius * 2], up: [2, 6], life: [0.4, 0.8] });
+      fx.ring(e.x, e.z, e.radius, a, Math.round(12 + e.radius * 6));
+      rig.shake(Math.min(0.7, 0.2 + e.radius * 0.12), 0.25);
+      sfx.slam();
+    });
+    events.on('hazard', (e) => {
+      // Co-op guests draw the host's hazards (the host's own were placed by the boss already).
+      if (this.world.role === 'guest') this.world.boss?.hazards.add(e.spec);
+    });
+    events.on('affinity', (e) => {
+      const name = { fire: 'fire', frost: 'frost', lightning: 'lightning', force: 'force' }[e.element] ?? e.element;
+      nums.spawn(e.x, 2.6, e.z, e.label === 'weak' ? `Weak to ${name}!` : `Resists ${name}`, 'note');
     });
     events.on('playerDied', () => {
       if (this.coop) {

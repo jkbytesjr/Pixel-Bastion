@@ -79,6 +79,30 @@ export class Colossus extends Boss {
     this.chargeLane.position.set(0, 0.03, CHARGE_LENGTH / 2);
     this.chargeLane.visible = false;
     this.model.root.add(this.slamRing, this.chargeLane);
+    this.powers.push(
+      {
+        // Enraged: stamps the ground and sends three shockwaves rolling out; roll through them.
+        name: 'Earthquake',
+        cooldown: 10,
+        minPhase: 2,
+        cast: 1.0,
+        timer: 2,
+        run: (ctx) => {
+          for (let i = 0; i < 3; i++) this.hazard(ctx, { k: 'ring', x: this.pos.x, z: this.pos.z, r: 11, speed: 6.5, delay: 0.5 + i * 0.8, base: 18, knock: 9 });
+        },
+      },
+      {
+        // Hurls boulders at every hero: get out of the marked circle.
+        name: 'Boulder Toss',
+        cooldown: 6.5,
+        minPhase: 1,
+        cast: 0.8,
+        timer: 3,
+        run: (ctx) => {
+          for (const h of this.heroTargets(ctx)) this.hazard(ctx, { k: 'circle', x: h.pos.x, z: h.pos.z, r: 1.9, delay: 1.15, base: 26, knock: 10 });
+        },
+      },
+    );
   }
 
   protected fight(dt: number, ctx: EnemyContext): void {
@@ -93,6 +117,10 @@ export class Colossus extends Boss {
         if (!moved) this.turnToward(this.angleToPlayer(ctx), 4, dt);
         this.animateWalk(dt, moved, 6);
         if (this.attackCooldown > 0) break;
+        if (this.tryPower(ctx)) {
+          this.attackCooldown = 1;
+          break;
+        }
         if (this.enraged && this.summonTimer <= 0) this.enter('summon');
         else if (dist < 3.6) this.enter('slamWindup');
         else if (dist < 12 && ctx.grid.lineOfSight(this.pos.x, this.pos.z, ctx.player.pos.x, ctx.player.pos.z))
@@ -184,6 +212,8 @@ export class Colossus extends Boss {
   }
 
   private recover(time: number): void {
+    // The recovery after every attack is the boss's vulnerable window.
+    this.expose(time);
     this.recoverTime = time;
     this.attackCooldown = this.enraged ? 0.6 : 1.1;
     this.enter('recover');

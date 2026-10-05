@@ -1,4 +1,7 @@
 import type { Lesson } from '../world/tutorial';
+import { DODGE_COST } from '../systems/stamina';
+import { HIGH_GROUND } from '../systems/combat';
+import { groundAt } from '../world/terrain';
 import type { Player } from '../entities/player';
 import type { Boss } from '../entities/boss';
 import { xpToNext } from '../systems/progression';
@@ -58,6 +61,10 @@ export class Hud {
   private readonly potionCount: HTMLSpanElement;
   private readonly xpFill: HTMLDivElement;
   private readonly levelBadge: HTMLSpanElement;
+  private readonly staminaFill: HTMLDivElement;
+  private readonly highGround: HTMLSpanElement;
+  private lastStamina = -1;
+  private lastHigh = false;
   private readonly deathScreen: HTMLDivElement;
   private readonly floorLabel: HTMLDivElement;
   private readonly bossBar: HTMLDivElement;
@@ -115,6 +122,7 @@ export class Hud {
         <div class="vitals">
           <div class="hp-bar"><div class="hp-fill"></div><span class="hp-text"></span></div>
           <div class="xp-row"><span class="level-badge"></span><div class="xp-bar"><div class="xp-fill"></div></div></div>
+          <div class="stamina-row" title="Stamina: each dodge roll uses a third"><div class="stamina-bar"><div class="stamina-fill"></div><i></i><i></i></div><span class="high-ground hidden" title="You're on higher ground: +20% damage">▲ High ground</span></div>
         </div>
         ${ability('slam', 'Q', 'Ground slam (Q)')}
         ${ability('volley', 'E', 'Spear volley (E)')}
@@ -158,6 +166,8 @@ export class Hud {
     this.potionCount = root.querySelector('.potion-count')!;
     this.xpFill = root.querySelector('.xp-fill')!;
     this.levelBadge = root.querySelector('.level-badge')!;
+    this.staminaFill = root.querySelector('.stamina-fill')!;
+    this.highGround = root.querySelector('.high-ground')!;
     this.deathScreen = root.querySelector('.death')!;
     this.floorLabel = root.querySelector('.floor-label')!;
     this.bossBar = root.querySelector('.boss-bar')!;
@@ -216,7 +226,20 @@ export class Hud {
       const low = player.alive && player.hp / player.maxHp < 0.3;
       this.vignette.classList.toggle('low', low);
     }
-    this.setAbility('dodge', player.dodgeCooldown / player.dodgeCooldownMax);
+    // The roll button shades while there isn't enough stamina for another roll.
+    const short = Math.max(0, 1 - player.stamina.value / DODGE_COST);
+    this.setAbility('dodge', Math.max(player.dodgeCooldown / player.dodgeCooldownMax, short));
+    const stamina = Math.round(player.stamina.value);
+    if (stamina !== this.lastStamina) {
+      this.lastStamina = stamina;
+      this.staminaFill.style.width = `${stamina}%`;
+      this.staminaFill.classList.toggle('low', stamina < DODGE_COST);
+    }
+    const high = player.alive && groundAt(player.pos.x, player.pos.z) > HIGH_GROUND;
+    if (high !== this.lastHigh) {
+      this.lastHigh = high;
+      this.highGround.classList.toggle('hidden', !high);
+    }
     this.setAbility('slam', player.slamCooldown / player.slamCooldownMax);
     this.setAbility('volley', player.volleyCooldown / player.volleyCooldownMax);
     const potions = player.inventory.potions;
@@ -272,6 +295,9 @@ export class Hud {
     this.lastBossHp = boss.hp;
     this.bossName.textContent = boss.name;
     this.bossFill.style.width = `${(boss.hp / boss.maxHp) * 100}%`;
+    // The bar shifts colour as the boss enrages (below half) and turns desperate (below a quarter).
+    this.bossBar.classList.toggle('phase2', boss.phase === 2);
+    this.bossBar.classList.toggle('phase3', boss.phase === 3);
   }
 
   /** Run timer and kill count under the floor label. */

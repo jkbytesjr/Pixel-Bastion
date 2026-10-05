@@ -14,6 +14,7 @@ import { Inventory, computeStats, type DerivedStats } from '../systems/inventory
 import { MAX_LEVEL, addXp, newProgress, type Progress } from '../systems/progression';
 import type { ArmorItem, WeaponItem } from '../systems/loot';
 import { applyPerk, type PerkId } from '../systems/perks';
+import { DODGE_COST, newStamina, spendStamina, tickStamina } from '../systems/stamina';
 import type { WeaponPower } from '../systems/powers';
 
 export interface PlayerInput {
@@ -33,7 +34,8 @@ export interface PlayerInput {
 const SWING_TIME: Record<WeaponKind, number> = { sword: 0.26, spear: 0.3, bow: 0.3 };
 const DODGE_TIME = 0.32;
 const DODGE_SPEED = 13;
-const DODGE_COOLDOWN = 1.1;
+/** Short gap between rolls; stamina is what limits how many you can chain. */
+const DODGE_COOLDOWN = 0.3;
 const HURT_IFRAMES = 0.35;
 const SLAM_TIME = 0.42;
 export const SLAM_COOLDOWN = 6;
@@ -55,6 +57,9 @@ export class Player extends Actor {
    * drink). Co-op sends these so other players see the same animations.
    */
   readonly actions: [number, number, number, number, number] = [0, 0, 0, 0, 0];
+
+  /** Dodge-roll stamina: each roll spends some, and it refills after a short pause. */
+  readonly stamina = newStamina();
 
   /** Admin cheats. */
   godMode = false;
@@ -185,6 +190,11 @@ export class Player extends Actor {
     return this.inventory.armor?.rarity === 'admin';
   }
 
+  /** In the middle of an attack, slam or drink: an opening monsters can exploit. */
+  get busy(): boolean {
+    return this.swingTimer > 0 || this.slamTimer > 0 || this.drinkTimer > 0;
+  }
+
   get dodging(): boolean {
     return this.dodgeTimer > 0;
   }
@@ -275,6 +285,8 @@ export class Player extends Actor {
     this.hp = this.maxHp;
     this.alive = true;
     this.knock.x = this.knock.z = 0;
+    this.stamina.value = 100;
+    this.stamina.wait = 0;
     this.swingTimer = this.dodgeTimer = this.hurtTimer = this.deathTimer = this.slamTimer = 0;
     this.attackCooldown = this.dodgeCooldown = this.slamCooldown = this.volleyCooldown = this.potionCooldown = 0;
     this.strikeReady = this.slamReady = this.volleyReady = false;
@@ -307,6 +319,7 @@ export class Player extends Actor {
     this.volleyCooldown = Math.max(0, this.volleyCooldown - dt);
     this.potionCooldown = Math.max(0, this.potionCooldown - dt);
     this.hurtTimer = Math.max(0, this.hurtTimer - dt);
+    tickStamina(this.stamina, dt, this.stats.cooldownRate);
     this.tickCommon(dt, grid);
 
     this.drinkTimer = Math.max(0, this.drinkTimer - dt);
@@ -338,7 +351,7 @@ export class Player extends Actor {
     }
 
     // Dodge roll: commit to a direction (movement, else aim), brief i-frames.
-    if (input.dodge && this.dodgeCooldown <= 0 && this.dodgeTimer <= 0 && this.slamTimer <= 0) {
+    if (input.dodge && this.dodgeCooldown <= 0 && this.dodgeTimer <= 0 && this.slamTimer <= 0 && spendStamina(this.stamina, DODGE_COST)) {
       const ax = input.aimX - this.pos.x;
       const az = input.aimZ - this.pos.z;
       const al = Math.hypot(ax, az) || 1;

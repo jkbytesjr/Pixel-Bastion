@@ -89,7 +89,7 @@ export class Wraith extends Enemy {
         break;
       case 'drift': {
         if (!ctx.player.alive) return this.enter('idle');
-        const moved = this.moveToward(ctx, dt, SPEED);
+        const moved = this.evadeShots(ctx, dt, SPEED) || this.moveToward(ctx, dt, SPEED);
         this.animateWalk(dt, false);
         armL.rotation.x = armR.rotation.x = moved ? 0.6 : 0.2;
         this.attackLean = moved ? 0.3 : 0;
@@ -179,6 +179,8 @@ export class Wraith extends Enemy {
   }
 
   private enter(state: State): void {
+    // Off balance after attacking: a window to punish.
+    if (state === 'retreat') this.expose(0.6);
     if (state !== 'fadeOut' && state !== 'fadeIn') this.setOpacity(1);
     this.state = state;
     this.stateTime = 0;
