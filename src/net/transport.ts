@@ -56,7 +56,10 @@ async function peerTransport(code: string, host: boolean): Promise<Transport> {
   const { Peer } = await import('peerjs');
   const t = baseTransport();
   const conns = new Map<string, import('peerjs').DataConnection>();
-  const peer = host ? new Peer(PEER_PREFIX + code, { debug: 0 }) : new Peer({ debug: 0 });
+  // Guests pick their own random id too: asking the PeerJS service for one is a cross-site
+  // request some origins (like GitHub Pages) get blocked on.
+  const guestId = `${PEER_PREFIX}g-${code}-${Math.random().toString(36).slice(2, 10)}`;
+  const peer = new Peer(host ? PEER_PREFIX + code : guestId, { debug: 0 });
   await new Promise<void>((resolve, reject) => {
     peer.once('open', () => resolve());
     peer.once('error', (e) => reject(explain(e, host)));
