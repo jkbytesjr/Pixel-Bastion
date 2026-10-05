@@ -8,7 +8,7 @@ Nothing is pre-made: dungeon layouts, character models, loot and sound effects a
 ![three.js](https://img.shields.io/badge/three.js-000000?logo=threedotjs&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
 
-**[▶ Play in your browser](https://jkbytesjr.github.io/Pixel-Bastion/)** · [Latest release: V1.4](https://github.com/jkbytesjr/Pixel-Bastion/releases/tag/v1.4) · [What's new](docs/releases/v1.4.0.md)
+**[▶ Play in your browser](https://jkbytesjr.github.io/Pixel-Bastion/)** · [Latest release: V1.5](https://github.com/jkbytesjr/Pixel-Bastion/releases/tag/v1.5) · [What's new](docs/releases/v1.5.0.md)
 
 ![Fighting a pack of monsters on a raised altar in the Overgrown Ruins](docs/screenshots/combat.png)
 
