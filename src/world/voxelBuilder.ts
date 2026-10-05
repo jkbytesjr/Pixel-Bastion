@@ -335,16 +335,30 @@ export function buildLevelMeshes(level: LevelLike, seed: number): THREE.Group {
   };
 
   planRooms(c);
+  // Pocket dimensions (and their walls) get an otherworldly style of their own.
+  const pockets = c.rooms.filter((r) => r.kind === 'pocket');
+  const inPocket = (x: number, z: number) => pockets.some((r) => x >= r.x - 1 && x <= r.x + r.w && z >= r.z - 1 && z <= r.z + r.h);
+  const base = c.b;
   for (let z = 0; z < grid.height; z++)
     for (let x = 0; x < grid.width; x++) {
       const t = grid.get(x, z);
-      if (t === Tile.Floor) floorTile(c, x, z);
+      c.b = t !== Tile.Void && inPocket(x, z) ? POCKET_BIOME : base;
+      // Gates stand on floor; their doors / cracked walls are drawn by the gate itself.
+      if (t === Tile.Floor || t === Tile.Gate) floorTile(c, x, z);
       else if (t === Tile.Wall) wallTile(c, x, z);
       else if (t === Tile.Prop) {
         floorTile(c, x, z);
         prop(c, x, z);
       } else voidTile(c, x, z);
+      if (c.b === POCKET_BIOME && t === Tile.Floor) {
+        // Glowing seams between the tiles.
+        const h = heightAt(c, x, z);
+        c.glow.add(x + 0.02, h + 0.004, z + 0.5, 0.03, 0.006, 1, 0xa060ff, 0, 0, 1.4);
+        c.glow.add(x + 0.5, h + 0.004, z + 0.02, 1, 0.006, 0.03, 0xa060ff, 0, 0, 1.4);
+      }
     }
+  c.b = base;
+  for (const r of pockets) pocketDressing(c, r);
   for (const r of c.rooms) {
     arches(c, r);
     roomDressing(c, r);
@@ -377,6 +391,53 @@ export function buildLevelMeshes(level: LevelLike, seed: number): THREE.Group {
   }
   group.userData.spots = c.spots;
   return group;
+}
+
+/** A pocket dimension: violet-black stone floating in the void, seams of light. */
+const POCKET_BIOME: Biome = {
+  id: 'pocket',
+  name: 'Pocket Dimension',
+  floor: [['slate', 1]],
+  corridor: ['slate'],
+  floorColors: { slate: [0x241634, 0x2a1a3e, 0x1e1230] },
+  wall: 'basalt',
+  wallColors: [0x2a1a3e, 0x24163a, 0x30204a, 0x1e1230],
+  mortar: 0x0c0614,
+  cap: 'cornice',
+  capColor: 0x6a3aaa,
+  trim: 0x3a2458,
+  pillar: 0x5a3a8a,
+  chasm: 'island',
+  chasmDepth: 7,
+  strata: [0x2a1a3e, 0x1e1230, 0x3a2458, 0x14081e],
+  lower: [0x14081e],
+  ivy: 0,
+  banner: null,
+  chains: false,
+  water: false,
+  beams: false,
+  railing: null,
+  mosaic: [0x6a3aaa, 0x2a1a3e, 0xc8a0ff],
+  rune: 0xb060ff,
+  crystals: [0xb060ff, 0x6ad8ff],
+  props: [['urn', 1]],
+  indoor: true,
+  moods: ['arcane'],
+};
+
+/** Shards of crystal drifting around a pocket dimension, lighting it from outside. */
+function pocketDressing(c: Ctx, r: RoomRect): void {
+  const { rng, glow } = c;
+  for (let i = 0; i < 14; i++) {
+    const a = rng.range(0, Math.PI * 2);
+    const d = Math.max(r.w, r.h) / 2 + rng.range(2, 6);
+    const x = r.x + r.w / 2 + Math.sin(a) * d;
+    const z = r.z + r.h / 2 + Math.cos(a) * d;
+    const y = rng.range(-2, 3);
+    const color = rng.pick([0xb060ff, 0x6ad8ff, 0xff6ad8]);
+    glow.add(x, y, z, rng.range(0.15, 0.4), rng.range(0.5, 1.4), rng.range(0.15, 0.4), color, rng.range(0, Math.PI), rng.range(-0.5, 0.5), 1.8);
+    c.spots.push({ x, y, z, color, halo: 1.6 });
+  }
 }
 
 /** Decide which rooms get mosaics and which get water channels. */
@@ -1002,7 +1063,7 @@ function arches(c: Ctx, r: RoomRect): void {
     for (let i = 0; i <= count; i++) {
       const a = s0 + i;
       const [tx, tz] = horizontal ? [a, fixed] : [fixed, a];
-      const open = i < count && grid.isWalkable(tx, tz);
+      const open = i < count && (grid.isWalkable(tx, tz) || grid.get(tx, tz) === Tile.Gate);
       if (open && run < 0) run = a;
       if (open || run < 0) continue;
       const n = a - run;

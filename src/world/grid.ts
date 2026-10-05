@@ -5,6 +5,8 @@ export const Tile = {
   Wall: 2,
   /** Solid furniture (crates, barrels, urns, planters) in room corners: blocks like a wall. */
   Prop: 3,
+  /** A closed gate (boss gate, vault door, cracked wall): blocks until opened, then becomes floor. */
+  Gate: 4,
 } as const;
 export type Tile = (typeof Tile)[keyof typeof Tile];
 

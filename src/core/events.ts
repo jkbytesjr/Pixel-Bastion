@@ -17,6 +17,20 @@ export interface GameEvents {
   explosion: { x: number; z: number; radius: number };
   bossEngaged: { name: string };
   bossDefeated: { x: number; z: number; name: string };
+  /** Capture shrine changed state (capturing / contested / idle). */
+  captureState: { state: string };
+  /** The shrine is captured. */
+  captured: { x: number; z: number };
+  /** A gate opened (boss gate, vault door, cracked wall). */
+  gateOpened: { kind: string; x: number; z: number; tiles: { x: number; z: number }[] };
+  /** A cracked wall took a hit, and when it broke open. */
+  wallCracked: { x: number; z: number };
+  secretFound: { x: number; z: number };
+  /** A pressure plate was stepped on (in order or not), and the whole puzzle solved. */
+  plate: { x: number; z: number; ok: boolean };
+  puzzleSolved: { x: number; z: number };
+  /** This player's hero went through a mini-portal (`pocket`: into a pocket dimension). */
+  warp: { x: number; z: number; pocket: boolean };
   /** A boss entered a harder phase (2: enraged, 3: desperate). */
   bossPhase: { name: string; phase: number };
   /** A boss hazard was placed (co-op guests draw the host's). */

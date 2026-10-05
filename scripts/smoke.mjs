@@ -726,6 +726,174 @@ try {
   check(typeof swings === 'number' && typeof swings2 === 'number', 'sword combo state tracks swings');
   await page.evaluate(() => (window.__game.worldState.player.godMode = false));
 
+  // --- Floor features: shrine & gates, plates, secrets, portals ---
+  await page.evaluate(() => window.__game.startRun(4242));
+  await waitSim(0.3);
+  await page.evaluate(() => {
+    const g = window.__game;
+    g.worldState.player.godMode = true;
+    for (const e of g.worldState.enemies) if (!e.isBoss) { e.rewardsOnDeath = false; e.applyDamage(1e9, 0, 0); }
+  });
+  await waitSim(0.3);
+  const feat = await page.evaluate(() => {
+    const lvl = window.__game.level;
+    const boss = lvl.gates.find((x) => x.kind === 'boss');
+    return { capture: lvl.capture, bossGate: boss ? boss.tiles[0] : null, gates: lvl.gates.length, puzzles: lvl.puzzles.length, portals: lvl.portals.map((p) => p.kind) };
+  });
+  check(!!feat.capture && !!feat.bossGate, `the floor has a capture shrine and a sealed boss gate (${feat.gates} gates, portals: ${feat.portals.join(', ')})`);
+  check(
+    await page.evaluate((t) => !window.__game.level.grid.isWalkable(t.x, t.z), feat.bossGate),
+    'the boss gate blocks the way while closed',
+  );
+  check(await page.isVisible('.objective'), 'the objective tracker shows the shrine goal');
+
+  // Capture: stand in the circle; a monster inside contests it.
+  await page.evaluate((c) => window.__game.debugTeleport(c.x, c.z), feat.capture);
+  await page.waitForFunction(() => window.__game.worldState.features.capture.state === 'capturing', null, { timeout: 30000 });
+  check(true, 'standing in the shrine circle starts capturing it');
+  await page.waitForSelector('.obj-meter:not(.hidden)', { timeout: 10000 });
+  check(true, 'the capture meter appears near the shrine');
+  await page.evaluate((c) => {
+    const w = window.__game.worldState;
+    const e = window.__game.debugCreateEnemy('grunt');
+    w.spawn(e, c.x + 1, c.z);
+    e.maxHp = e.hp = 99999;
+  }, feat.capture);
+  await page.waitForFunction(() => window.__game.worldState.features.capture.state === 'contested', null, { timeout: 30000 });
+  check(true, 'a monster in the circle contests the capture');
+  await page.evaluate(() => {
+    const w = window.__game.worldState;
+    for (const e of w.enemies) if (!e.isBoss) { e.rewardsOnDeath = false; e.applyDamage(1e9, 0, 0); }
+    w.features.capture.progress = 0.9;
+  });
+  await page.waitForFunction(() => window.__game.worldState.features.capture.state === 'captured', null, { timeout: 60000 });
+  check(await page.evaluate((t) => window.__game.level.grid.isWalkable(t.x, t.z), feat.bossGate), 'capturing the shrine opens the boss gate');
+
+  // Plate puzzle: wrong order resets, right order opens the vault.
+  const puzzleFloor = await page.evaluate(() => {
+    for (let d = 0; d < 8; d++) {
+      window.__game.loadFloor(d);
+      if (window.__game.level.puzzles.length) return d;
+    }
+    return -1;
+  });
+  if (puzzleFloor >= 0) {
+    const pz = await page.evaluate(() => {
+      const p = window.__game.level.puzzles[0];
+      const gate = window.__game.level.gates.find((g) => g.id === p.gateId).tiles[0];
+      return { plates: p.plates, order: p.order, gate };
+    });
+    await page.evaluate(() => {
+      const w = window.__game.worldState;
+      w.player.godMode = true;
+      for (const e of w.enemies) if (!e.isBoss) { e.rewardsOnDeath = false; e.applyDamage(1e9, 0, 0); }
+    });
+    const step = async (i) => {
+      await page.evaluate((p) => window.__game.debugTeleport(p.x, p.z), pz.plates[i]);
+      await waitSim(0.25);
+      await page.evaluate((p) => window.__game.debugTeleport(p.x + 2.2, p.z + 2.2), pz.plates[i]);
+      await waitSim(0.15);
+    };
+    await step(pz.order[1]);
+    check((await page.evaluate(() => window.__game.worldState.features.snapshot().pz[0])) === 0, 'a plate out of order resets the puzzle');
+    for (const i of pz.order) await step(i);
+    check(await page.evaluate((t) => window.__game.level.grid.isWalkable(t.x, t.z), pz.gate), 'the plates in the right order open the vault');
+  } else check(false, 'found a floor with a plate puzzle');
+
+  // Secret wall: strike it and it gives way.
+  const secret = await page.evaluate(() => {
+    const lvl = window.__game.level;
+    const g = lvl.gates.find((x) => x.kind === 'secret');
+    if (!g) return null;
+    const t = g.tiles[0];
+    // The room side: the floor tile next to it.
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (lvl.grid.isWalkable(t.x + dx, t.z + dz)) return { t, x: t.x + dx + 0.5, z: t.z + dz + 0.5 };
+    return null;
+  });
+  if (secret) {
+    await page.evaluate((s) => window.__game.debugTeleport(s.x, s.z), secret);
+    await waitSim(0.2);
+    const aimAt = await page.evaluate((t) => window.__game.debugWorldToScreen(t.x + 0.5, t.z + 0.5), secret.t);
+    await page.mouse.move(aimAt.x, aimAt.y);
+    await page.mouse.down();
+    await page.waitForFunction((t) => window.__game.level.grid.isWalkable(t.x, t.z), secret.t, { timeout: 60000 }).catch(() => {});
+    await page.mouse.up();
+    check(await page.evaluate((t) => window.__game.level.grid.isWalkable(t.x, t.z), secret.t), 'striking a cracked wall reveals a secret passage');
+  } else check(false, 'found a secret wall on the floor');
+
+  // Mini-portal: into the pocket dimension, and back out to exactly where we stepped in.
+  const link = await page.evaluate(() => window.__game.level.portals.find((p) => p.kind === 'pocket'));
+  if (link) {
+    await page.evaluate((l) => window.__game.debugTeleport(l.a.x, l.a.z), link);
+    await waitSim(0.3);
+    const inPocket = await page.evaluate((l) => Math.hypot(window.__game.worldState.player.pos.x - l.b.x, window.__game.worldState.player.pos.z - l.b.z) < 0.5, link);
+    check(inPocket, 'a mini-portal carries the hero into its pocket dimension');
+    await waitSim(1);
+    check(
+      await page.evaluate((l) => Math.hypot(window.__game.worldState.player.pos.x - l.b.x, window.__game.worldState.player.pos.z - l.b.z) < 0.5, link),
+      'arriving on a portal does not bounce the hero straight back',
+    );
+    await page.evaluate((l) => window.__game.debugTeleport(l.b.x + 2, l.b.z - 2), link);
+    await waitSim(0.3);
+    await page.evaluate((l) => window.__game.debugTeleport(l.b.x, l.b.z), link);
+    await waitSim(0.3);
+    const back = await page.evaluate(() => ({ ...window.__game.worldState.player.pos }));
+    check(Math.hypot(back.x - link.a.x, back.z - link.a.z) < 0.05, 'the return portal puts the hero back exactly where they entered');
+  } else check(false, 'found a pocket-dimension portal');
+
+  // --- Tactics ---
+  await page.evaluate(() => window.__game.loadFloor(0));
+  await waitSim(0.3);
+  const rolls = await page.evaluate(() => {
+    const p = window.__game.worldState.player;
+    p.stamina.value = 20;
+    return p.actions[1];
+  });
+  await page.keyboard.press('Space');
+  await waitSim(0.3);
+  check((await page.evaluate(() => window.__game.worldState.player.actions[1])) === rolls, 'no dodge roll without enough stamina');
+  await page.evaluate(() => (window.__game.worldState.player.stamina.value = 100));
+  await page.keyboard.press('Space');
+  await waitSim(0.3);
+  check((await page.evaluate(() => window.__game.worldState.player.actions[1])) === rolls + 1, 'with stamina the roll goes off and costs stamina');
+  const tactics = await page.evaluate(() => {
+    const g = window.__game;
+    const w = g.worldState;
+    const seen = [];
+    const off = w.events.on.bind(w.events);
+    off('hit', (e) => e.tag && seen.push(e.tag));
+    off('affinity', (e) => seen.push(`aff:${e.label}`));
+    const p = w.player.pos;
+    const spider = g.debugCreateEnemy('spider');
+    w.spawn(spider, p.x + 1.5, p.z);
+    spider.maxHp = spider.hp = 99999;
+    w.damageEnemy(spider, { base: 10, power: 1, critChance: 0, critMultiplier: 1 }, p.x, p.z, 0, false, w.player, 'fire');
+    const grunt = g.debugCreateEnemy('grunt');
+    w.spawn(grunt, p.x - 1.5, p.z);
+    grunt.maxHp = grunt.hp = 99999;
+    grunt.expose(1);
+    const before = grunt.hp;
+    w.damageEnemy(grunt, { base: 10, power: 1, critChance: 0, critMultiplier: 1 }, p.x, p.z, 0);
+    return { seen, exposedHit: before - grunt.hp };
+  });
+  check(tactics.seen.includes('weak') && tactics.seen.includes('aff:weak'), `fire finds the spider's weakness (${tactics.seen.join(', ')})`);
+  check(tactics.seen.includes('exposed') && tactics.exposedHit >= 13, `exposed monsters take extra damage (${tactics.exposedHit})`);
+
+  // --- Bosses: phases and telegraphed powers ---
+  await page.evaluate(() => {
+    const g = window.__game;
+    const b = g.worldState.boss;
+    g.debugTeleport(b.pos.x, b.pos.z + 5);
+    b.hp = b.maxHp * 0.45;
+  });
+  await page.waitForFunction(() => window.__game.worldState.boss.engaged, null, { timeout: 60000 });
+  await page.waitForSelector('.boss-bar.phase2', { timeout: 30000 });
+  check(true, 'a hurt boss enrages (phase 2 on the boss bar)');
+  await page.waitForFunction(() => window.__game.worldState.boss.hazards.count > 0, null, { timeout: 90000 }).catch(() => {});
+  check(await page.evaluate(() => window.__game.worldState.boss.hazards.count > 0), 'the boss uses telegraphed hazard powers');
+  await page.screenshot({ path: `${outDir}/28-boss-hazards.png` });
+  await page.evaluate(() => (window.__game.worldState.player.godMode = false));
+
   // --- Hidden admin access and commands ---
   await page.evaluate(() => window.__game.showMenu());
   await settle(200);

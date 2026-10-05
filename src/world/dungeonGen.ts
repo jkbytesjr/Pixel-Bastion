@@ -5,8 +5,10 @@
 import { Rng, hashSeed } from '../core/rng';
 import { Tile, TileGrid } from './grid';
 import { placeTorches, type Level } from './level';
+import { addFeatures, type CaptureSite, type Gate, type PlatePuzzle, type PortalLink } from './features';
 
-export type RoomKind = 'start' | 'normal' | 'treasure' | 'boss';
+/** pocket: a sealed pocket dimension (via mini-portal). vault / secret: hidden behind a gate. */
+export type RoomKind = 'start' | 'normal' | 'treasure' | 'boss' | 'pocket' | 'vault' | 'secret';
 export type EnemyKind = 'grunt' | 'archer' | 'exploder' | 'spider' | 'shieldbearer' | 'shaman' | 'wraith' | 'boss';
 export type BossKind = 'colossus' | 'huntress' | 'pyromancer' | 'necromancer';
 export const BOSS_KINDS: readonly BossKind[] = ['colossus', 'huntress', 'pyromancer', 'necromancer'];
@@ -36,11 +38,18 @@ export interface Dungeon extends Level {
   /** Pairs of room ids joined by a corridor. */
   connections: [number, number][];
   spawns: EnemySpawn[];
-  chests: { x: number; z: number }[];
+  /** `rich` chests (vaults, secret rooms, pocket dimension) hold better loot. */
+  chests: { x: number; z: number; rich?: boolean }[];
   /** Where the exit portal appears (inside the boss room). */
   exit: { x: number; z: number };
   /** Which boss guards this floor. */
   boss: BossKind;
+  /** Gates: the boss arena (opened by the capture shrine), vault doors and cracked walls. */
+  gates: Gate[];
+  /** The shrine to capture to open the boss gates (null if the floor has none). */
+  capture: CaptureSite | null;
+  portals: PortalLink[];
+  puzzles: PlatePuzzle[];
   /** The hand-built tutorial floor. */
   tutorial?: boolean;
 }
@@ -241,7 +250,20 @@ export function generateDungeon(seed: number, depth: number): Dungeon {
   }
 
   const sc = roomCenter(start);
+  const playerStart = { x: sc.x + 0.5, z: sc.z + 0.5 };
   const exit = { x: boss.x + boss.w / 2, z: boss.z + 2.5 };
+  // Shrine and boss gates, portals, the plate vault and secret rooms (their own random stream).
+  const featureRng = new Rng(hashSeed(`${seed}:${depth}:features`));
+  const features = addFeatures({
+    grid,
+    rooms,
+    rng: featureRng,
+    start: playerStart,
+    taken: used,
+    addChest: (p, rich) => chests.push({ x: p.x, z: p.z, ...(rich ? { rich: true } : {}) }),
+    addSpawns: (room, spots) =>
+      spots.forEach((p, i) => spawns.push({ kind: featureRng.weighted(enemyWeights(depth)), x: p.x, z: p.z, roomId: room.id, elite: i === 0 })),
+  });
   return {
     seed,
     depth,
@@ -255,7 +277,8 @@ export function generateDungeon(seed: number, depth: number): Dungeon {
     theme: depth,
     heights: floorHeights(grid, rooms, new Rng(hashSeed(`${seed}:${depth}:heights`))),
     torches: placeTorches(grid, 6),
-    playerStart: { x: sc.x + 0.5, z: sc.z + 0.5 },
+    playerStart,
+    ...features,
   };
 }
 
@@ -328,7 +351,7 @@ function placeCornerProps(grid: TileGrid, rooms: Room[], rng: Rng): { x: number;
 export function floorHeights(grid: TileGrid, rooms: Room[], rng: Rng): Float32Array {
   const heights = new Float32Array(grid.width * grid.height);
   for (const r of rooms) {
-    if (r.kind === 'boss' || r.w < 11 || r.h < 11 || !rng.chance(0.75)) continue;
+    if (!(r.kind === 'normal' || r.kind === 'treasure' || r.kind === 'start') || r.w < 11 || r.h < 11 || !rng.chance(0.75)) continue;
     // Interior: two tiles in from the walls; the core sits one more tile in so its stairs fit.
     const ix0 = r.x + 3;
     const iz0 = r.z + 3;

@@ -55,6 +55,10 @@ export function buildTutorial(): Dungeon {
     playerStart: { x: c[0].x - 1.5, z: c[0].z + 0.5 },
     tutorial: true,
     heights: new Float32Array(grid.width * grid.height),
+    gates: [],
+    capture: null,
+    portals: [],
+    puzzles: [],
   };
 }
 

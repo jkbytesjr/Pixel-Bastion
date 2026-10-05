@@ -10,7 +10,10 @@ const SIGHT = 13;
 const REDRAW_INTERVAL = 1 / 20;
 /** Enemies further than this (in tiles) are not shown, even on explored ground. */
 const ENEMY_RANGE = 22;
-const COLORS = { floor: '#5a5368', wall: '#a49cb8', chest: '#f2c14e', portal: '#b07cff', enemy: '#ff5a4e', boss: '#ff3df2' };
+const COLORS = { floor: '#5a5368', wall: '#a49cb8', gate: '#c8503a', chest: '#f2c14e', portal: '#b07cff', enemy: '#ff5a4e', boss: '#ff3df2' };
+
+/** Minimap colour for a tile. */
+const tileColor = (t: number) => (t === Tile.Wall || t === Tile.Prop ? COLORS.wall : t === Tile.Gate ? COLORS.gate : COLORS.floor);
 
 /**
  * Circular, player-centred minimap with fog of war. Rotated so "up" matches the
@@ -55,9 +58,20 @@ export class Minimap {
         const t = grid.get(x, z);
         if (t === Tile.Void) continue;
         ex.seen[z * grid.width + x] = 1;
-        this.baseCtx.fillStyle = t === Tile.Wall || t === Tile.Prop ? COLORS.wall : COLORS.floor;
+        this.baseCtx.fillStyle = tileColor(t);
         this.baseCtx.fillRect(x, z, 1, 1);
       }
+  }
+
+  /** Redraw tiles that changed (a gate opened), if they've been seen. */
+  refreshTiles(tiles: readonly { x: number; z: number }[]): void {
+    const ex = this.explored;
+    if (!ex) return;
+    for (const t of tiles) {
+      if (!ex.seen[t.z * ex.grid.width + t.x]) continue;
+      this.baseCtx.fillStyle = tileColor(ex.grid.get(t.x, t.z));
+      this.baseCtx.fillRect(t.x, t.z, 1, 1);
+    }
   }
 
   load(world: GameWorld): void {
@@ -81,7 +95,7 @@ export class Minimap {
       for (const i of ex.reveal(player.pos.x, player.pos.z, SIGHT)) {
         const x = i % ex.grid.width;
         const z = (i - x) / ex.grid.width;
-        this.baseCtx.fillStyle = ex.grid.get(x, z) === Tile.Wall || ex.grid.get(x, z) === Tile.Prop ? COLORS.wall : COLORS.floor;
+        this.baseCtx.fillStyle = tileColor(ex.grid.get(x, z));
         this.baseCtx.fillRect(x, z, 1, 1);
       }
     }
@@ -134,6 +148,8 @@ export class Minimap {
       ctx.fillStyle = COLORS.chest;
       ctx.fillRect(c.x - 0.5, c.z - 0.5, 1, 1);
     }
+    // Shrine, mini-portals and closed gates.
+    for (const m of world.features.markers()) dot(m.x, m.z, m.size, m.color);
     for (const p of world.pickups) {
       if (!seen(p.pos.x, p.pos.z)) continue;
       dot(p.pos.x, p.pos.z, 0.35, p.drop.type === 'potion' ? '#e2574c' : RARITY_COLOR[p.drop.item.rarity]);

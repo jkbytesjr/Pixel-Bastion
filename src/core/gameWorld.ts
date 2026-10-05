@@ -25,6 +25,7 @@ import { activeMods, type ModEnemyDef } from '../systems/mods';
 import type { DamageResult } from '../systems/damage';
 import { Rng } from './rng';
 import { EventBus } from './events';
+import { FloorFeatures } from './floorFeatures';
 
 /** Enemies further than this from the player are frozen and hidden. */
 const ACTIVE_RANGE = 30;
@@ -85,6 +86,8 @@ export class GameWorld {
   private ctx!: EnemyContext;
   private deathAnnounced = false;
   private readonly focus = new THREE.Vector3();
+  /** Shrine, gates, plate puzzles, cracked walls and mini-portals. */
+  readonly features: FloorFeatures = new FloorFeatures(this);
   /** Co-op: the other players' heroes. */
   readonly remotes: RemotePlayer[] = [];
   role: NetRole = 'solo';
@@ -106,7 +109,7 @@ export class GameWorld {
 
   constructor(
     scene: THREE.Scene,
-    private readonly events: EventBus,
+    readonly events: EventBus,
   ) {
     scene.add(this.root);
     this.root.add(this.player.object, this.projectiles.mesh);
@@ -128,6 +131,8 @@ export class GameWorld {
     this.runes = this.levelGroup.children.filter((o) => o.name === 'rune');
     this.portal = new Portal(level.exit.x, level.exit.z);
     this.levelGroup.add(this.torches.group, this.portal.group);
+    this.features.load();
+    this.levelGroup.add(this.features.group);
     this.root.add(this.levelGroup);
     this.flow = new FlowField(level.grid);
     this.player.respawn(level.playerStart.x, level.playerStart.z);
@@ -395,6 +400,9 @@ export class GameWorld {
       level.grid,
       (owner) => (guest ? [] : this.targetsFor(owner)),
       (p, t) => this.onProjectileHit(p, t),
+      (p, x, z) => {
+        if (p.owner === 'player') this.features.strikeTile(x, z);
+      },
     );
 
     if (!guest) for (const e of this.enemies) this.tickStatus(e, dt);
@@ -413,13 +421,15 @@ export class GameWorld {
         c.open();
         this.events.emit('chestOpened', { x: c.x, z: c.z });
         this.net?.chestOpened(i);
-        this.dropLoot(rollDrops(this.rng, 'chest', level.depth), c.x, c.z);
+        // Chests in vaults, secret rooms and pocket dimensions hold better loot.
+        this.dropLoot(rollDrops(this.rng, level.chests[i]?.rich ? 'vault' : 'chest', level.depth), c.x, c.z);
       }
       c.update(dt);
     });
     this.portal.update(dt);
     // Any living hero stepping in takes the whole party down (guests wait for the host to say so).
     if (!guest && heroes.some((p) => p.alive && this.portal.contains(p.pos.x, p.pos.z))) this.portalReached = true;
+    this.features.update(dt);
     this.animateScenery(dt, camera);
   }
 
@@ -738,8 +748,22 @@ export class GameWorld {
     }
   }
 
+  /** Capture waves: a monster climbs out of the floor. */
+  spawnRising(kind: EnemyKind, x: number, z: number): void {
+    const e = this.spawn(createEnemy(kind, this.level.depth), x, z);
+    if (this.role === 'host') e.maxHp = e.hp = Math.round(e.maxHp * (1 + 0.6 * this.remotes.length));
+    e.rise();
+    this.events.emit('rise', { x, z });
+  }
+
+  /** Gates opened: monsters need fresh routes. */
+  pathsChanged(): void {
+    this.flow.invalidate();
+  }
+
   private resolveSlam(player: Player = this.player): void {
     this.events.emit('slam', { x: player.pos.x, z: player.pos.z, radius: SLAM_RADIUS, admin: player.ascendedArmor, who: this.heroId(player) });
+    this.features.strikeArea(player.pos.x, player.pos.z, SLAM_RADIUS);
     const attack = { ...player.attackStats, base: 14 + player.stats.weaponDamage };
     for (const e of this.enemies) {
       if (!e.alive || Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z) > SLAM_RADIUS + e.radius) continue;
@@ -790,6 +814,7 @@ export class GameWorld {
       return;
     }
     this.events.emit('swing', { ...player.pos, who: this.heroId(player) });
+    this.features.strikeArc(player.pos.x, player.pos.z, player.facing, w.range);
     for (const e of this.enemies) {
       if (!e.alive) continue;
       if (!inArc(player.pos.x, player.pos.z, player.facing, e.pos.x, e.pos.z, w.range, w.arc, e.radius)) continue;

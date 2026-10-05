@@ -49,6 +49,12 @@ const FORWARDED: (keyof GameEvents)[] = [
   'hazard',
   'bossStrike',
   'bossPhase',
+  'captured',
+  'captureState',
+  'wallCracked',
+  'secretFound',
+  'plate',
+  'puzzleSolved',
 ];
 
 /** What the session needs from the game. */
@@ -296,6 +302,7 @@ export class CoopSession {
           if (msg.k !== this.token) break;
           this.applySnapshot(msg.pl);
           world.applyEnemySnapshot(msg.en);
+          if (msg.ft) world.features.applySnapshot(msg.ft);
           world.projectiles.setFromNet(msg.pr);
           break;
         case 'ev':
@@ -429,7 +436,7 @@ export class CoopSession {
     const players = [this.stateOf(world.player, HOST_ID), ...world.remotes.map((r) => this.stateOf(r, r.netId))];
     // Guests own their HP: report what they told us, not this copy's numbers.
     for (const [i, r] of world.remotes.entries()) Object.assign(players[i + 1], { hp: Math.ceil(r.hp), mhp: r.maxHp, alive: r.alive });
-    this.toGuests({ t: 'snap', k: this.token, pl: players, en: world.enemySnapshot(), pr: world.projectiles.toNet() });
+    this.toGuests({ t: 'snap', k: this.token, pl: players, en: world.enemySnapshot(), pr: world.projectiles.toNet(), ft: world.features.snapshot() });
     if (this.eventBatch.length) this.toGuests({ t: 'ev', k: this.token, list: this.eventBatch.splice(0) });
     // Everyone down: the run is over for the whole party.
     if (!this.wiped && world.heroes.every((h) => !h.alive)) {

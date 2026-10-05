@@ -143,6 +143,8 @@ export class Projectiles {
     grid: TileGrid,
     targetsFor: (owner: ProjectileOwner) => readonly ProjectileTarget[],
     onHit: (p: ProjectileSpec, target: ProjectileTarget) => boolean,
+    /** A projectile flew into a wall tile (heroes' shots can crack secret walls). */
+    onWall?: (p: ProjectileSpec, x: number, z: number) => void,
   ): void {
     for (const p of this.list) {
       // Sub-step so fast arrows can't skip past a target.
@@ -152,6 +154,7 @@ export class Projectiles {
         p.z += (p.dirZ * p.speed * dt) / steps;
         if (!grid.isWalkableAt(p.x, p.z)) {
           p.alive = false;
+          onWall?.(p, p.x, p.z);
           break;
         }
         for (const t of targetsFor(p.owner)) {

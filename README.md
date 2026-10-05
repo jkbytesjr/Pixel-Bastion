@@ -15,10 +15,12 @@ Nothing is pre-made: dungeon layouts, character models, loot and sound effects a
 ## Features
 
 - **Endless procedurally generated floors**: arena rooms and wide corridors that get harder as you go. A seed always rebuilds the same dungeon, and the game remembers your deepest floor.
-- **Four bosses** with telegraphed attacks and an enraged phase below half health. They return with grander titles every four floors.
+- **Four bosses** with telegraphed attacks that get faster in an enraged phase below half health and a desperate phase below a quarter. Each also has two special powers: warned impact zones, shockwaves to roll through, and eruption lanes. They return with grander titles every four floors.
 - **Real-time combat**: mouse-aimed melee and bow attacks, a dodge roll with brief invulnerability, a ground slam, a spear volley and health potions.
 - **Loot** in four rarities (common, rare, unique, mythic) with random stat modifiers. Unique and mythic weapons carry special powers like Chain Lightning and Ignite. Your equipped armor and weapon show on your character.
 - **Level-up choices**: each level offers three random attributes to pick from. The choice waits until you're out of combat (or press L), so it never interrupts a fight. Levels come faster the deeper you go.
+- **Shrines, gates and secrets**: capture each floor's shrine (stand in its circle while monsters try to contest it) to open the gates to the boss. Mini-portals lead to sealed pocket dimensions and back, pressure-plate puzzles open vaults, and cracked walls hide secret rooms full of loot.
+- **Tactical combat**: dodge rolls use stamina, monsters are exposed for extra damage right after they attack, high ground adds 20% damage, and every monster and boss has elemental weaknesses and resistances to exploit with weapon powers. Monsters flank, take turns, sidestep your shots and pounce on openings.
 - **Online co-op**: play with up to 3 friends. One player hosts and shares a room code or invite link, and everyone fights through the same dungeon together. No server or sign-up needed.
 - **Tutorial**: a short six-room walkthrough of moving, fighting, dodging, abilities, loot and a boss. New runs offer it first.
 - **Character creator**: pick skin, hair style and colour, beard, eyes, tunic, scarf, trousers and boots, with a live preview.
@@ -86,7 +88,7 @@ npm run preview    # serve the build locally
 | W A S D | Move. By default W walks toward the mouse, S backs away and A/D circle around it. Switch to screen-relative movement on the title screen. |
 | Mouse | Aim |
 | Left click | Attack (hold to keep attacking) |
-| Space | Dodge roll, with brief invulnerability |
+| Space | Dodge roll, with brief invulnerability. Uses stamina (the green bar): about three rolls from full |
 | Q | Ground slam (area damage) |
 | E | Spear volley (7 spears in a spread) |
 | 1 | Drink a health potion |
@@ -102,6 +104,19 @@ npm run preview    # serve the build locally
 ## How a run works
 
 Each floor is a set of rooms joined by corridors, ending in a boss arena. Killing the boss triggers a slow-motion finale and opens a portal to the next floor. The floors never end: enemies keep getting tougher, and the run is over when you die. The death screen shows how deep you got and your best floor so far.
+
+**Each floor.** Find the shrine and capture it to open the gates sealing the boss arena. Stand inside its circle until the meter fills; any monster in the circle contests it, and more climb out of the floor while you capture. Along the way:
+
+- A purple mini-portal leads to a pocket dimension with an elite pack and a rich chest. Its return portal puts you back exactly where you stepped in.
+- Three coloured pressure plates open a vault. The obelisk beside the vault door blinks their order, and a wrong plate resets them.
+- A faintly glowing crack marks a hidden wall. Strike it twice to break through to a secret room.
+- A cyan portal pair, on some floors, is a shortcut between distant rooms.
+
+**Tactics.**
+
+- **Exposed:** monsters are off balance for a moment after attacking (a yellow marker above them) and take 50% more damage.
+- **High ground:** fighting from a raised ledge or altar gives +20% damage, and fighting up from below gives -15%. The same goes for monsters hitting you.
+- **Elements:** weapon powers deal elements: Ignite and Detonate are fire, Frost is frost, Chain Lightning is lightning, and Shockwave is force. Spiders burn, wraiths fear lightning, exploders and the Cinder King shrug off fire, and the game tells you the first time you find a weakness or resistance.
 
 **Enemies.** New kinds appear as you go deeper, and any of them can spawn as a gold-ringed **elite** with much more health, harder hits and a guaranteed good drop. Elites get more common the deeper you go.
 
@@ -148,7 +163,7 @@ npm run smoke                                    # headless browser test
 npm run smoke:coop                               # two-player co-op test
 ```
 
-- **Unit tests** (`npm test`, Vitest) cover the pure game logic: dungeon generation and boss order, the collision grid, damage formulas, loot rolls and weapon powers, inventory, leveling pace and attribute picks, save validation, co-op messages, mod validation and merging, character looks, the tutorial layout, pathfinding, the fixed-step clock and minimap exploration.
+- **Unit tests** (`npm test`, Vitest) cover the pure game logic: dungeon generation and boss order, the collision grid, damage formulas, loot rolls and weapon powers, inventory, leveling pace and attribute picks, save validation, co-op messages, stamina and tactics, boss hazards, shrine capture and plate puzzles, floor features (gates, portals, secrets) and their reachability, mod validation and merging, character looks, the tutorial layout, pathfinding, the fixed-step clock and minimap exploration.
 - **Smoke test** (`npm run smoke`) starts the dev server and plays the game in headless Chromium with Playwright. It checks movement (including walking toward the mouse), combat, every enemy type (including spider lunges, shield blocking, shaman healing and wraith blinks), elites and summons, ten floors and their bosses, the boss-defeated banner, the death summary, loot, every weapon power, inventory, abilities, level-ups, the pause menu, saving and continuing, the title screen, the character creator, the mods screen, the tutorial, effects and the HUD. It fails on any console error or warning, and saves screenshots to `smoke-out/`. Install the browser once with `npx playwright install chromium`.
 
 ### Project layout

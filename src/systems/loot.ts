@@ -43,7 +43,7 @@ export type Item = WeaponItem | ArmorItem;
 /** What an enemy or chest can drop. Potions stack, so they aren't items. */
 export type Drop = { type: 'item'; item: Item } | { type: 'potion' };
 
-export type DropSource = 'grunt' | 'archer' | 'exploder' | 'spider' | 'shieldbearer' | 'shaman' | 'wraith' | 'elite' | 'boss' | 'chest';
+export type DropSource = 'grunt' | 'archer' | 'exploder' | 'spider' | 'shieldbearer' | 'shaman' | 'wraith' | 'elite' | 'boss' | 'chest' | 'vault';
 
 export const RARITY_MULT: Record<Rarity, number> = { common: 1, rare: 1.3, unique: 1.7, mythic: 2.2, admin: 10 };
 const MOD_COUNT: Record<Rarity, [number, number]> = { common: [0, 1], rare: [2, 2], unique: [3, 3], mythic: [4, 4], admin: [7, 7] };
@@ -174,6 +174,10 @@ export function rollDrops(rng: Rng, source: DropSource, itemLevel: number, dropM
       // Elites always drop something good, on top of their normal drop.
       drops.push(item({ minRarity: 'rare', uniqueBoost: 10 }));
       if (rng.chance(0.5)) drops.push({ type: 'potion' });
+      break;
+    case 'vault':
+      // Vaults, secret rooms and pocket dimensions: two good items and a potion.
+      drops.push(item({ minRarity: 'rare', uniqueBoost: 20 }), item({ minRarity: 'rare', uniqueBoost: 10 }), { type: 'potion' });
       break;
     case 'chest':
       drops.push(item());

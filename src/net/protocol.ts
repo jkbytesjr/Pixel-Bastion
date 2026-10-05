@@ -11,7 +11,7 @@ import type { ArmorItem, Drop, WeaponItem } from '../systems/loot';
 import { PERK_IDS, type PerkCounts } from '../systems/perks';
 
 /** Bump when messages change; peers on different versions can't play together. */
-export const NET_VERSION = 1;
+export const NET_VERSION = 2;
 export const MAX_PLAYERS = 4;
 /** The host is always player 0. */
 export const HOST_ID = 0;
@@ -80,7 +80,7 @@ export type ToGuest =
   | { t: 'lobby'; players: { id: number; name: string }[]; started: boolean }
   /** A run started (`fresh`: everyone starts over) or the party moved to another floor. */
   | { t: 'run'; seed: number; depth: number; token: number; fresh: boolean }
-  | { t: 'snap'; k: number; pl: PlayerState[]; en: EnemyState[]; pr: ProjectileState[] }
+  | { t: 'snap'; k: number; pl: PlayerState[]; en: EnemyState[]; pr: ProjectileState[]; ft: import('../core/floorFeatures').FeatureState }
   | { t: 'ev'; k: number; list: NetEvent[] }
   | { t: 'profiles'; list: { id: number; p: Profile }[] }
   | { t: 'dmg'; amount: number; kx: number; kz: number }

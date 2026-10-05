@@ -29,6 +29,11 @@ export class FlowField {
     this.dist.fill(-1);
   }
 
+  /** Force a recompute next update (the walkable tiles changed: a gate opened). */
+  invalidate(): void {
+    this.targetKey = '';
+  }
+
   /** Recompute only if the target moved to a new tile. */
   update(wx: number, wz: number): void {
     this.updateMany([{ x: wx, z: wz }]);

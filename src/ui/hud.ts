@@ -88,6 +88,8 @@ export class Hud {
   onSkipTutorial: () => void = () => {};
   /** "Attribute ready" badge clicked. */
   onLevelReady: () => void = () => {};
+  private readonly objective: HTMLDivElement;
+  private lastObjective = '';
   private bannerTimer = 0;
   private lastHp = -1;
   private lastRunText = '';
@@ -105,6 +107,7 @@ export class Hud {
       <div class="run-info"></div>
       <div class="boss-bar hidden"><div class="boss-name"></div><div class="boss-track"><div class="boss-fill"></div></div></div>
       <div class="toasts"></div>
+      <div class="objective hidden"><span class="obj-text"></span><div class="obj-meter hidden"><div class="obj-fill"></div><span class="obj-label"></span></div></div>
       <div class="tutorial-box hidden"></div>
       <button type="button" class="levelup-ready hidden" title="Choose your attribute now (L)"></button>
       <div class="boss-banner hidden" aria-live="polite">
@@ -182,11 +185,31 @@ export class Hud {
     this.controls = root.querySelector('.controls-panel')!;
     this.soundHint = root.querySelector('.sound-hint')!;
     this.tutorialBox = root.querySelector('.tutorial-box')!;
+    this.objective = root.querySelector('.objective')!;
     this.levelReady = root.querySelector('.levelup-ready')!;
     this.levelReady.addEventListener('click', () => this.onLevelReady());
     root.querySelector('.restart')!.addEventListener('click', onRestart);
     root.querySelector('.new-run')!.addEventListener('click', () => this.onNewRun());
     root.querySelector('.to-menu')!.addEventListener('click', () => this.onMenu());
+  }
+
+  /**
+   * The floor objective line, with an optional capture meter (0..1 and a
+   * state: capturing / contested / idle). Null hides it.
+   */
+  setObjective(text: string | null, meter: { progress: number; state: string; label: string } | null = null): void {
+    const key = text === null ? '' : `${text}|${meter ? `${Math.round(meter.progress * 100)}|${meter.state}|${meter.label}` : ''}`;
+    if (key === this.lastObjective) return;
+    this.lastObjective = key;
+    this.objective.classList.toggle('hidden', text === null);
+    if (text === null) return;
+    this.objective.querySelector('.obj-text')!.textContent = text;
+    const m = this.objective.querySelector<HTMLDivElement>('.obj-meter')!;
+    m.classList.toggle('hidden', !meter);
+    if (!meter) return;
+    m.className = `obj-meter ${meter.state}`;
+    m.querySelector<HTMLDivElement>('.obj-fill')!.style.width = `${Math.round(meter.progress * 100)}%`;
+    m.querySelector('.obj-label')!.textContent = meter.label;
   }
 
   /** The tutorial checklist, or null to hide it. */

@@ -64,6 +64,20 @@ try {
     'both copies of the floor have the same monsters',
   );
   await waitFor(host, () => window.__game.worldState.remotes[0].name === 'Guesty');
+  // --- Floor features stay in sync: the host captures the shrine, the guest's gate opens ---
+  const gateTile = await g(host, () => window.__game.level.gates.find((x) => x.kind === 'boss')?.tiles[0] ?? null);
+  if (gateTile) {
+    check(await g(guest, (t) => !window.__game.level.grid.isWalkable(t.x, t.z), gateTile), "the guest's boss gate starts closed");
+    await g(host, () => {
+      const f = window.__game.worldState.features;
+      f.capture.progress = 1;
+      f.capture.state = 'captured';
+      f.openGate(window.__game.level.gates.find((x) => x.kind === 'boss').id);
+    });
+    await waitFor(guest, (t) => window.__game.level.grid.isWalkable(t.x, t.z), gateTile);
+    check((await g(guest, () => window.__game.worldState.features.capture.state)) === 'captured', "the host's capture opens the gate for the guest too");
+  } else check(false, 'the co-op floor has a boss gate');
+
   check(true, "the host knows the guest's name");
   await waitFor(guest, () => !!document.querySelector('.party-list:not(.hidden)'));
   check((await guest.textContent('.party-list')).includes('Hosty'), 'the party list shows everyone');

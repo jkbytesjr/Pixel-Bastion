@@ -511,6 +511,48 @@ export class Game {
       fx.burst(e.x, 0.7, e.z, { count: 30, color: 0xf2c14e, color2: 0xfff2b0, speed: [0.5, 2.5], up: [3, 7] });
       sfx.chest();
     });
+    events.on('captureState', (e) => {
+      if (e.state === 'contested') sfx.denied();
+    });
+    events.on('captured', (e) => {
+      hud.toast('Shrine captured! The boss gate is open.', 'good');
+      fx.burst(e.x, 1.5, e.z, { count: 60, color: 0x4ad8ff, color2: 0xffffff, speed: [1, 5], up: [4, 9], life: [0.8, 1.4], spread: 0.5 });
+      fx.ring(e.x, e.z, 3, 0x4ad8ff, 40);
+      rig.shake(0.4, 0.4);
+      sfx.levelUp();
+    });
+    events.on('gateOpened', (e) => {
+      this.minimap.refreshTiles(e.tiles);
+      fx.burst(e.x, 1, e.z, { count: 30, color: 0x8a8690, color2: 0xc8a050, speed: [1, 3], up: [2, 5], life: [0.5, 1] });
+      rig.shake(0.35, 0.35);
+      sfx.chest();
+    });
+    events.on('wallCracked', (e) => {
+      fx.burst(e.x, 1, e.z, { count: 14, color: 0x8a8690, color2: 0xffb04a, speed: [1, 3], up: [1, 4], life: [0.4, 0.8] });
+      sfx.hit('enemy', false);
+    });
+    events.on('secretFound', () => {
+      hud.toast('A secret passage!', 'loot');
+      sfx.pickup('unique');
+    });
+    events.on('plate', (e) => {
+      fx.burst(e.x, 0.2, e.z, { count: 10, color: e.ok ? 0xffd23f : 0xff3a24, speed: [0.5, 2], up: [1, 3], life: [0.3, 0.6] });
+      if (e.ok) sfx.pickup('rare');
+      else {
+        sfx.denied();
+        hud.toast('Wrong order: the plates reset', 'danger');
+      }
+    });
+    events.on('puzzleSolved', () => {
+      hud.toast('Puzzle solved! A vault opens.', 'good');
+      sfx.pickup('mythic');
+    });
+    events.on('warp', (e) => {
+      // Our own hero went through a mini-portal: the camera jumps with them.
+      this.rig.snapTo(this.focus.set(e.x, 0, e.z));
+      sfx.portal();
+      if (e.pocket) hud.toast('A pocket dimension…', 'info');
+    });
     events.on('bossPhase', (e) => {
       hud.toast(e.phase === 3 ? `${e.name} is desperate!` : `${e.name} is enraged!`, 'danger');
       rig.shake(0.6, 0.5);
@@ -829,6 +871,7 @@ export class Game {
     this.composer.render(dt);
     this.fps.tick(time, this.renderer.info.render.calls);
     this.adaptResolution(dt);
+    this.updateObjective();
     if (this.coop) {
       this.coop.update(dt);
       if (this.mode === 'playing')
@@ -1373,6 +1416,25 @@ export class Game {
     const newBest = !this.tutorial && floor > prev;
     if (newBest) saveBestFloor(floor);
     return { seed: this.seed, floor, time: this.runTime, kills: this.world.kills, best: Math.max(prev, floor), newBest };
+  }
+
+  /** The objective line and capture meter. */
+  private updateObjective(): void {
+    const { world } = this;
+    if (this.mode !== 'playing' || this.tutorial || !world.level) {
+      this.hud.setObjective(null);
+      return;
+    }
+    const f = world.features;
+    const site = world.level.capture;
+    if (site && !f.bossOpen) {
+      const p = world.player;
+      const near = Math.hypot(p.pos.x - site.x, p.pos.z - site.z) < site.radius + 4;
+      const c = f.capture;
+      const label = c.state === 'contested' ? 'Contested: clear the monsters out!' : c.state === 'capturing' ? `Capturing ${Math.round(c.progress * 100)}%` : 'Stand in the circle';
+      this.hud.setObjective('◆ Capture the shrine to open the boss gate', near ? { progress: c.progress, state: c.state, label } : null);
+    } else if (world.boss?.alive) this.hud.setObjective(site ? '◆ The gate is open: defeat the boss' : '◆ Defeat the boss');
+    else this.hud.setObjective('◆ Step into the portal');
   }
 
   /** Keep the sun's shadow camera over the part of the world in view; light comes from the north-west. */

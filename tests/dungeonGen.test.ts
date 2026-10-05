@@ -5,28 +5,22 @@ import { BOSS_KINDS, STEP, bossForFloor, generateDungeon, type Dungeon } from '.
 /** A floor far beyond where most runs end. */
 const DEEP = 30;
 import { Tile } from '../src/world/grid';
+import { reachability } from '../src/world/features';
 
-/** Count floor tiles reachable from the player start (4-connected). */
+/**
+ * Count floor tiles reachable from the player start (4-connected), with
+ * every gate open and through the mini-portals: once a floor's shrine,
+ * puzzles and secrets are done, everything must be reachable.
+ */
 function reachableFloor(d: Dungeon): { reachable: number; total: number } {
-  const { grid } = d;
-  const seen = new Uint8Array(grid.width * grid.height);
-  const sx = Math.floor(d.playerStart.x);
-  const sz = Math.floor(d.playerStart.z);
-  const stack = [[sx, sz]];
-  seen[sz * grid.width + sx] = 1;
+  const dist = reachability(d.grid, d.playerStart, { gatesOpen: true, portals: d.portals });
   let reachable = 0;
-  while (stack.length) {
-    const [x, z] = stack.pop()!;
-    reachable++;
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nx = x + dx;
-      const nz = z + dz;
-      if (!grid.isWalkable(nx, nz) || seen[nz * grid.width + nx]) continue;
-      seen[nz * grid.width + nx] = 1;
-      stack.push([nx, nz]);
-    }
-  }
-  const total = grid.tiles.reduce((n, t) => n + (t === Tile.Floor ? 1 : 0), 0);
+  let total = 0;
+  d.grid.tiles.forEach((t, i) => {
+    if (t !== Tile.Floor && t !== Tile.Gate) return;
+    total++;
+    if (dist[i] >= 0) reachable++;
+  });
   return { reachable, total };
 }
 
@@ -192,7 +186,8 @@ describe('arena layout', () => {
   it('rooms are open arenas', () => {
     for (const seed of SEEDS) {
       const d = generateDungeon(seed, 0);
-      for (const r of d.rooms) expect(Math.min(r.w, r.h)).toBeGreaterThanOrEqual(11);
+      // Combat rooms; the small vaults and secret rooms behind walls are meant to be cosy.
+      for (const r of d.rooms.filter((x) => !['vault', 'secret'].includes(x.kind))) expect(Math.min(r.w, r.h)).toBeGreaterThanOrEqual(11);
       expect(d.rooms.find((r) => r.kind === 'boss')!.w).toBeGreaterThanOrEqual(19);
     }
   });
@@ -248,5 +243,75 @@ describe('floor themes', () => {
     expect(floorTheme(5, 3)).toEqual(floorTheme(5, 3));
     const firsts = new Set(SEEDS.map((s) => floorTheme(s, 0).biome.id));
     expect(firsts.size).toBeGreaterThan(1);
+  });
+});
+
+describe('floor features', () => {
+  it('seal the boss arena behind a shrine that can be reached before the gates open', () => {
+    let withShrine = 0;
+    for (const seed of SEEDS)
+      for (const depth of [0, 3, 9]) {
+        const d = generateDungeon(seed, depth);
+        const bossGate = d.gates.find((g) => g.kind === 'boss');
+        if (!d.capture) {
+          expect(bossGate).toBeUndefined();
+          continue;
+        }
+        withShrine++;
+        expect(bossGate).toBeDefined();
+        const closed = reachability(d.grid, d.playerStart, { gatesOpen: false, portals: d.portals });
+        const at = (p: { x: number; z: number }) => closed[Math.floor(p.z) * d.grid.width + Math.floor(p.x)];
+        // The shrine is reachable with the gates shut; the boss is not.
+        expect(at(d.capture)).toBeGreaterThanOrEqual(0);
+        const boss = d.spawns.find((s) => s.kind === 'boss')!;
+        expect(at(boss)).toBe(-1);
+        // Every gate tile sits where a wall or corridor would be, never inside a room.
+        for (const g of d.gates) for (const t of g.tiles) expect(d.grid.get(t.x, t.z)).toBe(Tile.Gate);
+      }
+    expect(withShrine).toBeGreaterThan(SEEDS.length * 2);
+  });
+
+  it('link portals between reachable spots, with the pocket dimension sealed off on foot', () => {
+    let pockets = 0;
+    for (const seed of SEEDS) {
+      const d = generateDungeon(seed, 1);
+      const walk = reachability(d.grid, d.playerStart, { gatesOpen: true });
+      for (const p of d.portals) {
+        expect(d.grid.isWalkableAt(p.a.x, p.a.z)).toBe(true);
+        expect(d.grid.isWalkableAt(p.b.x, p.b.z)).toBe(true);
+        if (p.kind !== 'pocket') continue;
+        pockets++;
+        // Only the portal gets you into the pocket dimension.
+        expect(walk[Math.floor(p.b.z) * d.grid.width + Math.floor(p.b.x)]).toBe(-1);
+        const pocket = d.rooms.find((r) => r.kind === 'pocket')!;
+        expect(d.spawns.some((s) => s.roomId === pocket.id)).toBe(true);
+        expect(d.chests.some((c) => c.rich && c.x > pocket.x && c.x < pocket.x + pocket.w && c.z > pocket.z && c.z < pocket.z + pocket.h)).toBe(true);
+      }
+    }
+    expect(pockets).toBeGreaterThan(0);
+  });
+
+  it('hide secret rooms and a plate vault behind single gate tiles, each with rich loot', () => {
+    let secrets = 0;
+    let vaults = 0;
+    for (const seed of SEEDS) {
+      const d = generateDungeon(seed, 2);
+      for (const g of d.gates) {
+        if (g.kind === 'boss') continue;
+        expect(g.tiles).toHaveLength(1);
+        if (g.kind === 'secret') secrets++;
+        else vaults++;
+      }
+      for (const pz of d.puzzles) {
+        expect(pz.plates).toHaveLength(3);
+        expect([...pz.order].sort()).toEqual([0, 1, 2]);
+        for (const p of pz.plates) expect(d.grid.isWalkableAt(p.x, p.z)).toBe(true);
+        expect(d.gates.find((g) => g.id === pz.gateId)?.kind).toBe('vault');
+      }
+      const rich = d.chests.filter((c) => c.rich).length;
+      expect(rich).toBeGreaterThanOrEqual(d.gates.filter((g) => g.kind !== 'boss').length);
+    }
+    expect(secrets).toBeGreaterThan(0);
+    expect(vaults).toBeGreaterThan(0);
   });
 });
