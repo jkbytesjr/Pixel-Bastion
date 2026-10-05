@@ -29,7 +29,12 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       # Pages serves the site from /<repository name>/.
+      # Optional co-op relay (TURN) server, from the repository's Actions variables.
       - run: npx vite build --base=/${{ github.event.repository.name }}/
+        env:
+          VITE_TURN_URLS: ${{ vars.TURN_URLS }}
+          VITE_TURN_USERNAME: ${{ vars.TURN_USERNAME }}
+          VITE_TURN_CREDENTIAL: ${{ vars.TURN_CREDENTIAL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

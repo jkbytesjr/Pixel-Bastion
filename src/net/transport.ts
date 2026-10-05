@@ -21,6 +21,26 @@ export interface Transport {
 
 const PEER_PREFIX = 'pixel-bastion-';
 
+/**
+ * How browsers find a way to each other. STUN servers let two computers
+ * discover their public addresses and connect directly. When a network
+ * blocks that (strict routers, school or work networks, mobile hotspots), a
+ * TURN server relays the traffic instead: set one at build time with
+ * VITE_TURN_URLS (comma-separated), VITE_TURN_USERNAME and VITE_TURN_CREDENTIAL.
+ */
+export function iceServers(): RTCIceServer[] {
+  const servers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+  const urls = (import.meta.env.VITE_TURN_URLS ?? '').split(',').map((u: string) => u.trim()).filter(Boolean);
+  if (urls.length) servers.push({ urls, username: import.meta.env.VITE_TURN_USERNAME ?? '', credential: import.meta.env.VITE_TURN_CREDENTIAL ?? '' });
+  return servers;
+}
+
+/** True when a relay (TURN) server is configured. */
+export const hasRelay = () => iceServers().length > 1;
+
+const NO_DIRECT_LINK =
+  "Found the host's game, but your two computers couldn't connect. Some networks (school or work Wi-Fi, mobile hotspots, some routers) block direct connections. Try both being on the same home Wi-Fi, or the host trying a different network.";
+
 /** Which transport this page uses (`?net=local` for tests). */
 export function useLocalTransport(): boolean {
   return new URLSearchParams(window.location.search).get('net') === 'local';
@@ -59,7 +79,7 @@ async function peerTransport(code: string, host: boolean): Promise<Transport> {
   // Guests pick their own random id too: asking the PeerJS service for one is a cross-site
   // request some origins (like GitHub Pages) get blocked on.
   const guestId = `${PEER_PREFIX}g-${code}-${Math.random().toString(36).slice(2, 10)}`;
-  const peer = new Peer(host ? PEER_PREFIX + code : guestId, { debug: 0 });
+  const peer = new Peer(host ? PEER_PREFIX + code : guestId, { debug: 0, config: { iceServers: iceServers() } });
   await new Promise<void>((resolve, reject) => {
     peer.once('open', () => resolve());
     peer.once('error', (e) => reject(explain(e, host)));
@@ -86,7 +106,8 @@ async function peerTransport(code: string, host: boolean): Promise<Transport> {
   } else {
     const conn = peer.connect(PEER_PREFIX + code, { reliable: true, serialization: 'json' });
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('The host did not answer. Check the code and try again.')), 15000);
+      // The room was found (otherwise PeerJS reports peer-unavailable); this means no network path opened.
+      const timer = setTimeout(() => reject(new Error(NO_DIRECT_LINK)), hasRelay() ? 25000 : 15000);
       conn.once('open', () => {
         clearTimeout(timer);
         resolve();
