@@ -21,6 +21,8 @@ export interface ProjectileSpec {
   orb?: boolean;
   /** Player weapon shot: hits can trigger weapon powers. */
   proc?: boolean;
+  /** The hero who fired it (co-op: whose stats and powers its hits use). */
+  shooter?: import('../entities/player').Player;
   /** Render as a thrown spear (shaft plus head) instead of an arrow. */
   spear?: { shaft: number; head: number };
   /** Leave a trail of sparks in this colour (drawn by the game from `trailPoints`). */
@@ -79,6 +81,47 @@ export class Projectiles {
   /** Projectiles that leave a trail, for the game to draw sparks behind. */
   *trailPoints(): Generator<{ x: number; z: number; color: number }> {
     for (const p of this.list) if (p.trail !== undefined) yield { x: p.x, z: p.z, color: p.trail };
+  }
+
+  /** Everything in flight, for co-op snapshots. */
+  toNet(): import('../net/protocol').ProjectileState[] {
+    const r = (v: number) => Math.round(v * 100) / 100;
+    return this.list.map((p) => ({
+      x: r(p.x),
+      z: r(p.z),
+      dx: r(p.dirX),
+      dz: r(p.dirZ),
+      s: p.speed,
+      ...(p.owner === 'enemy' ? { e: 1 as const } : {}),
+      ...(p.color !== undefined ? { c: p.color } : {}),
+      ...(p.orb ? { o: 1 as const } : {}),
+      ...(p.spear ? { sp: [p.spear.shaft, p.spear.head] as [number, number] } : {}),
+      ...(p.trail !== undefined ? { tr: p.trail } : {}),
+    }));
+  }
+
+  /** Co-op guests: replace what's in flight with the host's view (they then fly on until the next one). */
+  setFromNet(list: import('../net/protocol').ProjectileState[]): void {
+    const attack = { base: 0, power: 0, critChance: 0, critMultiplier: 1 };
+    this.list.length = 0;
+    for (const p of list.slice(0, MAX))
+      this.list.push({
+        x: p.x,
+        z: p.z,
+        dirX: p.dx,
+        dirZ: p.dz,
+        speed: p.s,
+        range: 30,
+        attack,
+        knockback: 0,
+        owner: p.e ? 'enemy' : 'player',
+        color: p.c,
+        orb: p.o === 1,
+        spear: p.sp ? { shaft: p.sp[0], head: p.sp[1] } : undefined,
+        trail: p.tr,
+        life: 2,
+        alive: true,
+      });
   }
 
   clear(): void {

@@ -29,7 +29,7 @@ export interface RunSave {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-function isItem(v: unknown): v is Item {
+export function isItem(v: unknown): v is Item {
   if (!isObj(v) || typeof v.name !== 'string' || typeof v.rarity !== 'string' || !Array.isArray(v.mods)) return false;
   if (v.kind === 'weapon') return typeof v.weapon === 'string' && isNum(v.damage);
   if (v.kind === 'armor') return isNum(v.armor) && isNum(v.maxHp);

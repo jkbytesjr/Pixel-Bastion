@@ -51,6 +51,8 @@ function buildIcon(drop: Drop): THREE.Group {
 
 /** A drop lying on the floor: bobbing icon plus a rarity-coloured light beam. */
 export class Pickup {
+  /** Co-op: the host's id for this drop. */
+  netId = -1;
   readonly group = new THREE.Group();
   readonly pos: { x: number; z: number };
   /** Set after "bag full" is shown, until the player walks away. */

@@ -10,9 +10,11 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:coop": "node scripts/coop-smoke.mjs"
   },
   "dependencies": {
+    "peerjs": "^1.5.5",
     "three": "^0.186.1"
   },
   "devDependencies": {

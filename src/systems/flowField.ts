@@ -18,8 +18,7 @@ const NEIGHBOURS = [
 export class FlowField {
   readonly dist: Int16Array;
   private readonly queue: Int32Array;
-  private targetX = -1;
-  private targetZ = -1;
+  private targetKey = '';
 
   constructor(
     private readonly grid: TileGrid,
@@ -32,19 +31,29 @@ export class FlowField {
 
   /** Recompute only if the target moved to a new tile. */
   update(wx: number, wz: number): void {
-    const tx = Math.floor(wx);
-    const tz = Math.floor(wz);
-    if (tx === this.targetX && tz === this.targetZ) return;
-    this.targetX = tx;
-    this.targetZ = tz;
+    this.updateMany([{ x: wx, z: wz }]);
+  }
+
+  /**
+   * Distance to the nearest of several targets (co-op: every living player),
+   * so monsters head for whoever is closest. Recomputes only when a target
+   * changes tile.
+   */
+  updateMany(targets: readonly { x: number; z: number }[]): void {
+    const tiles = targets.map((t) => [Math.floor(t.x), Math.floor(t.z)] as const);
+    const key = tiles.map(([x, z]) => `${x},${z}`).join(';');
+    if (key === this.targetKey) return;
+    this.targetKey = key;
     const { grid, dist, queue } = this;
     const w = grid.width;
     dist.fill(-1);
-    if (!grid.isWalkable(tx, tz)) return;
     let head = 0;
     let tail = 0;
-    dist[tz * w + tx] = 0;
-    queue[tail++] = tz * w + tx;
+    for (const [tx, tz] of tiles) {
+      if (!grid.isWalkable(tx, tz) || dist[tz * w + tx] === 0) continue;
+      dist[tz * w + tx] = 0;
+      queue[tail++] = tz * w + tx;
+    }
     while (head < tail) {
       const idx = queue[head++];
       const d = dist[idx];

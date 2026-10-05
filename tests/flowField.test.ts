@@ -32,3 +32,19 @@ describe('FlowField', () => {
     expect(f.nextStep(7.5, 2.5)).toBeNull();
   });
 });
+
+describe('FlowField with several targets', () => {
+  it('leads each tile toward the nearest target', () => {
+    const grid = new TileGrid(20, 3);
+    grid.fillRect(0, 1, 20, 1, Tile.Floor);
+    const flow = new FlowField(grid);
+    flow.updateMany([
+      { x: 1.5, z: 1.5 },
+      { x: 18.5, z: 1.5 },
+    ]);
+    expect(flow.distanceAt(4.5, 1.5)).toBe(3);
+    expect(flow.distanceAt(15.5, 1.5)).toBe(3);
+    expect(flow.nextStep(4.5, 1.5)!.x).toBe(3.5);
+    expect(flow.nextStep(15.5, 1.5)!.x).toBe(16.5);
+  });
+});

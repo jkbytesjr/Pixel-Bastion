@@ -3,19 +3,20 @@ import type { PowerId } from '../systems/powers';
 
 /** Minimal typed event bus so audio, particles and HUD can react without coupling. */
 export interface GameEvents {
-  swing: { x: number; z: number };
+  /** `who`: the player behind it (co-op), so each player's own effects aren't played twice. */
+  swing: { x: number; z: number; who?: number };
   shoot: { x: number; z: number; owner: 'player' | 'enemy' };
-  hit: { x: number; z: number; amount: number; crit: boolean; target: 'enemy' | 'player' };
+  hit: { x: number; z: number; amount: number; crit: boolean; target: 'enemy' | 'player'; who?: number };
   enemyDied: { x: number; z: number; kind: string; xp: number };
   explosion: { x: number; z: number; radius: number };
   bossEngaged: { name: string };
   bossDefeated: { x: number; z: number; name: string };
   /** `admin`: thrown in admin armor, which gets its own effects. */
-  slam: { x: number; z: number; radius: number; admin?: boolean };
+  slam: { x: number; z: number; radius: number; admin?: boolean; who?: number };
   /** Spear volley thrown (E). */
-  volley: { x: number; z: number; facing: number; admin: boolean };
+  volley: { x: number; z: number; facing: number; admin: boolean; who?: number };
   /** `admin`: an admin-armor dash, which gets its own effects. */
-  dodge: { x: number; z: number; admin?: boolean };
+  dodge: { x: number; z: number; admin?: boolean; who?: number };
   teleport: { x: number; z: number };
   /** A shield soaked up most of a hit. */
   blocked: { x: number; z: number };

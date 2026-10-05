@@ -34,6 +34,7 @@ export class MainMenu {
   onMoveMode: (mode: MoveMode) => void = () => {};
   onToggleSound: () => void = () => {};
   onControls: () => void = () => {};
+  onCoop: () => void = () => {};
   onCharacter: () => void = () => {};
   onMods: () => void = () => {};
   onTutorial: () => void = () => {};
@@ -84,6 +85,10 @@ export class MainMenu {
             <span class="menu-btn-title">New run</span>
             <span class="menu-btn-sub">${s ? 'Replaces your saved run' : 'A fresh, random dungeon'}</span>
           </button>
+          <button type="button" class="menu-btn" data-act="coop">
+            <span class="menu-btn-title">Co-op</span>
+            <span class="menu-btn-sub">Play online with up to 3 friends</span>
+          </button>
           <div class="menu-row2">
             <button type="button" class="menu-btn small" data-act="character">Character</button>
             <button type="button" class="menu-btn small" data-act="mods">Mods${info.mods ? ` <b class="mod-count">${info.mods}</b>` : ''}</button>
@@ -128,6 +133,7 @@ export class MainMenu {
     this.el.querySelector('[data-act="sound"]')!.addEventListener('click', () => this.onToggleSound());
     this.el.querySelector('[data-act="controls"]')!.addEventListener('click', () => this.onControls());
     this.el.querySelector('[data-act="character"]')!.addEventListener('click', () => this.onCharacter());
+    this.el.querySelector('[data-act="coop"]')!.addEventListener('click', () => this.onCoop());
     this.el.querySelector('[data-act="mods"]')!.addEventListener('click', () => this.onMods());
     this.el.querySelector('[data-act="tutorial"]')!.addEventListener('click', () => this.onTutorial());
     this.el.querySelector('form')!.addEventListener('submit', (e) => {
@@ -184,6 +190,7 @@ export class PauseMenu {
           <span class="menu-btn-title">Save &amp; quit to menu</span>
           <span class="menu-btn-sub">Continue later from the start of this floor, with your gear and level</span>
         </button>
+        <p class="coop-note hidden">Co-op keeps running while this menu is open.</p>
       </div>`;
     root.appendChild(this.el);
     this.el.querySelector('[data-act="resume"]')!.addEventListener('click', () => this.onResume());
@@ -193,6 +200,16 @@ export class PauseMenu {
 
   get open(): boolean {
     return !this.el.classList.contains('hidden');
+  }
+
+  /** In co-op the game doesn't pause, and leaving replaces save & quit. */
+  setCoop(on: boolean): void {
+    this.el.querySelector('h2')!.textContent = on ? 'Menu' : 'Paused';
+    this.el.querySelector('[data-act="save"] .menu-btn-title')!.textContent = on ? 'Leave co-op' : 'Save & quit to menu';
+    this.el.querySelector('[data-act="save"] .menu-btn-sub')!.textContent = on
+      ? 'Co-op runs are not saved'
+      : 'Continue later from the start of this floor, with your gear and level';
+    this.el.querySelector('.coop-note')!.classList.toggle('hidden', !on);
   }
 
   setOpen(open: boolean): void {

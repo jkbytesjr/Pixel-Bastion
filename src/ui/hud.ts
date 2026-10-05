@@ -294,6 +294,10 @@ export class Hud {
     this.controls.classList.toggle('hidden', !show);
   }
 
+  get deathShown(): boolean {
+    return !this.deathScreen.classList.contains('hidden');
+  }
+
   get controlsOpen(): boolean {
     return !this.controls.classList.contains('hidden');
   }
@@ -340,6 +344,24 @@ export class Hud {
   }
 
   /** Death screen with the run's summary; `null` hides it. */
+  /**
+   * Death screen wording and buttons: solo, co-op host (restarts for everyone)
+   * or co-op guest (waits for the host).
+   */
+  setDeathMode(mode: 'solo' | 'host' | 'guest'): void {
+    const s = this.deathScreen;
+    s.querySelector('h1')!.textContent = mode === 'solo' ? 'You have fallen' : 'Your party has fallen';
+    s.querySelector<HTMLElement>('.restart')!.style.display = mode === 'guest' ? 'none' : '';
+    s.querySelector<HTMLElement>('.new-run')!.style.display = mode === 'guest' ? 'none' : '';
+    s.querySelector('.to-menu')!.textContent = mode === 'solo' ? 'Main menu' : 'Leave co-op';
+    s.querySelector('.hint')!.textContent =
+      mode === 'solo'
+        ? 'Try again replays this seed (or press R). New run rolls a new dungeon.'
+        : mode === 'host'
+          ? 'Try again replays this seed for the whole party. New run rolls a new dungeon for everyone.'
+          : 'Waiting for the host to start again…';
+  }
+
   showDeath(summary: RunSummary | null): void {
     this.deathScreen.classList.toggle('hidden', !summary);
     if (!summary) return;

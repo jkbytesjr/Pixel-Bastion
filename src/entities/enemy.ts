@@ -60,6 +60,10 @@ export abstract class Enemy extends Actor {
   chillSlow = 1;
   freezeTime = 0;
   statusFxTimer = 0;
+  /** Co-op: the host's id for this enemy (same on every peer for the floor's starting monsters). */
+  netId = -1;
+  /** Co-op guests: where the host says this enemy is. */
+  net: { x: number; z: number; f: number } | null = null;
   /** Elite (champion) enemies: tougher, glowing, worth more. */
   elite = false;
   /** Multiplies XP for the kill (elites). */

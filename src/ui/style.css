@@ -848,7 +848,7 @@ body {
 /* ---- Title screen, pause menu, boss-defeated banner ---- */
 
 /* Title screen hides the gameplay HUD but keeps menus and the controls panel. */
-#hud.hud-off > :not(.main-menu):not(.controls-panel):not(.admin-login):not(.admin-console):not(.char-panel):not(.mods-panel):not(.tutorial-prompt) {
+#hud.hud-off > :not(.main-menu):not(.controls-panel):not(.admin-login):not(.admin-console):not(.char-panel):not(.mods-panel):not(.tutorial-prompt):not(.coop-panel) {
   display: none !important;
 }
 
@@ -1681,4 +1681,189 @@ body {
     width: calc(100vw - 28px);
     font-size: 13px;
   }
+}
+
+/* ---- Co-op: lobby, party list, name tags ---- */
+
+.coop-box {
+  gap: 12px;
+}
+
+.coop-field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.coop-field span {
+  opacity: 0.75;
+}
+
+.coop-field input {
+  padding: 10px 12px;
+  font: inherit;
+  color: #eee;
+  background: rgb(10 8 14 / 0.85);
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 10px;
+}
+
+.coop-field input:focus,
+.coop-join input:focus {
+  outline: none;
+  border-color: #ffd23f;
+}
+
+.coop-join input {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.coop-error {
+  margin: 0;
+  color: #ff8a6a;
+  font-size: 13px;
+}
+
+.coop-busy,
+.coop-wait {
+  margin: 0;
+  text-align: center;
+  opacity: 0.85;
+}
+
+.coop-label {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.coop-code {
+  text-align: center;
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  color: #ffd23f;
+  cursor: pointer;
+  user-select: all;
+}
+
+.coop-copy {
+  align-self: center;
+  font-size: 13px;
+}
+
+.coop-players {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.coop-slot {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgb(10 8 14 / 0.7);
+  border: 1px solid rgb(255 255 255 / 0.1);
+  font-size: 14px;
+}
+
+.coop-slot span {
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+.coop-slot.empty {
+  opacity: 0.45;
+  font-style: italic;
+}
+
+.coop-msg {
+  margin: 0;
+  min-height: 1em;
+  text-align: center;
+  font-size: 12px;
+  color: #b8e986;
+}
+
+.coop-note {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.7;
+  text-align: center;
+}
+
+.party-list {
+  position: absolute;
+  left: 14px;
+  bottom: 120px;
+  width: 210px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 5px;
+  background: rgb(14 11 20 / 0.75);
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.party-head {
+  opacity: 0.75;
+}
+
+.party-head b {
+  color: #ffd23f;
+  letter-spacing: 0.1em;
+}
+
+.party-row {
+  display: grid;
+  gap: 3px;
+}
+
+.party-row.down .party-name {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+.party-hp {
+  height: 5px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.12);
+  overflow: hidden;
+}
+
+.party-hp span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #c8323a, #e2574c);
+}
+
+.name-tags {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.name-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.55);
+  color: #8fd4ff;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px #000;
+}
+
+.name-tag.down {
+  color: #ff8a6a;
 }

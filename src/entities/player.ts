@@ -50,6 +50,12 @@ export class Player extends Actor {
   progress: Progress = newProgress();
   stats: DerivedStats = computeStats({}, this.inventory);
 
+  /**
+   * How many times each action has started (strike, dodge, slam, volley,
+   * drink). Co-op sends these so other players see the same animations.
+   */
+  readonly actions: [number, number, number, number, number] = [0, 0, 0, 0, 0];
+
   /** Admin cheats. */
   godMode = false;
   speedMult = 1;
@@ -328,6 +334,7 @@ export class Player extends Actor {
       this.heal(Math.round(this.maxHp * this.stats.potionHeal));
       this.potionHealed = this.hp - before;
       this.drinkTimer = DRINK_TIME;
+      this.actions[4]++;
     }
 
     // Dodge roll: commit to a direction (movement, else aim), brief i-frames.
@@ -338,6 +345,7 @@ export class Player extends Actor {
       this.dodgeDir.x = moving ? mx : ax / al;
       this.dodgeDir.z = moving ? mz : az / al;
       this.dodgeTimer = DODGE_TIME;
+      this.actions[1]++;
       this.dodgeCooldown = this.dodgeCooldownMax;
       this.swingTimer = 0;
       this.struck = true;
@@ -386,6 +394,7 @@ export class Player extends Actor {
     if (input.slam && this.slamCooldown <= 0 && this.slamTimer <= 0) {
       this.slamCooldown = this.slamCooldownMax;
       this.slamTimer = SLAM_TIME;
+      this.actions[2]++;
       this.slamPhase = 0;
       this.motion.impact(0.5);
       this.swingTimer = 0;
@@ -394,6 +403,7 @@ export class Player extends Actor {
     if (input.volley && this.volleyCooldown <= 0) {
       this.volleyCooldown = this.volleyCooldownMax;
       this.volleyReady = true;
+      this.actions[3]++;
     }
 
     // Slower while attacking, so attacks have weight.
@@ -415,6 +425,7 @@ export class Player extends Actor {
       this.struck = false;
       // Swords alternate a horizontal slash and an overhead chop.
       this.swingIndex ^= 1;
+      this.actions[0]++;
     }
     if (this.swingTimer > 0) {
       this.swingTimer = Math.max(0, this.swingTimer - dt);
@@ -595,7 +606,12 @@ export class Player extends Actor {
     legR.rotation.x = -0.15 * t;
   }
 
-  private syncTransform(): void {
+  /** Play the drinking animation without using a potion (other players' heroes). */
+  playDrink(): void {
+    this.drinkTimer = DRINK_TIME;
+  }
+
+  protected syncTransform(): void {
     this.model.root.position.set(this.pos.x, groundAt(this.pos.x, this.pos.z), this.pos.z);
     this.model.root.rotation.y = this.facing;
     if (this.worn?.aura) animateAura(this.worn.aura, this.auraTime);

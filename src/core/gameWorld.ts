@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { Player, type PlayerInput } from '../entities/player';
+import { RemotePlayer } from '../entities/remotePlayer';
+import { ENEMY_KINDS, HOST_ID, q2, type EnemyState } from '../net/protocol';
+import type { EnemyKind } from '../world/dungeonGen';
 import type { Enemy, EnemyContext } from '../entities/enemy';
 import { Boss } from '../entities/boss';
 import { Portal } from '../entities/portal';
@@ -20,7 +23,7 @@ import { xpForKill } from '../systems/progression';
 import { activeMods, type ModEnemyDef } from '../systems/mods';
 import type { DamageResult } from '../systems/damage';
 import { Rng } from './rng';
-import type { EventBus } from './events';
+import { EventBus } from './events';
 
 /** Enemies further than this from the player are frozen and hidden. */
 const ACTIVE_RANGE = 30;
@@ -32,6 +35,23 @@ const SLAM_RADIUS = 3.2;
 /** Spears thrown by the volley (E). */
 const VOLLEY_ARROWS = 7;
 const VOLLEY_SPREAD = (50 * Math.PI) / 180;
+
+/** Co-op role: alone, running the game for others, or playing in someone else's game. */
+export type NetRole = 'solo' | 'host' | 'guest';
+
+/** Things the co-op layer needs to hear about (host) or send (guest). */
+export interface NetHooks {
+  /** Host: a drop appeared / was picked up (so guests can show it). */
+  pickupSpawned(p: Pickup): void;
+  pickupTaken(p: Pickup): void;
+  /** Host: another player's hero picked something up. */
+  remoteLoot(r: RemotePlayer, drop: Drop): void;
+  /** Host: a kill's XP, shared with every player. */
+  sharedXp(amount: number): void;
+  chestOpened(index: number): void;
+  /** Guest: our hero started an attack the host has to resolve. */
+  localAction(kind: 'strike' | 'slam' | 'volley'): void;
+}
 
 /** Solid (lit) parts of a model cast shadows; glows, rings and effects don't. */
 export function castShadows(root: THREE.Object3D): void {
@@ -64,7 +84,17 @@ export class GameWorld {
   private ctx!: EnemyContext;
   private deathAnnounced = false;
   private readonly focus = new THREE.Vector3();
-  private readonly playerTargets: ProjectileTarget[] = [this.player];
+  /** Co-op: the other players' heroes. */
+  readonly remotes: RemotePlayer[] = [];
+  role: NetRole = 'solo';
+  net: NetHooks | null = null;
+  /** This peer's player id (the host is 0). */
+  localId = HOST_ID;
+  private nextEnemyId = 0;
+  private nextPickupId = 0;
+  private partyScale = 1;
+  /** Guests' monsters act out their AI for the animations, but their attacks and events go nowhere. */
+  private readonly mutedEvents = new EventBus();
   /**
    * Seconds since the player was last in a fight: dealt or took damage, or had
    * a monster close by. Level-up choices wait for a calm moment.
@@ -100,23 +130,29 @@ export class GameWorld {
     this.root.add(this.levelGroup);
     this.flow = new FlowField(level.grid);
     this.player.respawn(level.playerStart.x, level.playerStart.z);
+    this.nextEnemyId = 0;
+    this.nextPickupId = 0;
+    this.partyScale = 1;
     this.deathAnnounced = false;
     this.portalReached = false;
     this.boss = null;
     this.calmTime = 0;
+    const guest = this.role === 'guest';
     this.ctx = {
       player: this.player,
       grid: level.grid,
       flow: this.flow,
       rng: this.rng,
-      events: this.events,
-      hitPlayer: (source, attack, knockback) => this.hitPlayer(source, attack, knockback),
-      fireProjectile: (spec) => this.fireProjectile({ ...spec, owner: 'enemy' }),
-      explode: (x, z, radius, base, source) => this.explode(x, z, radius, base, source),
-      spawnEnemy: (kind, x, z) => {
-        this.spawn(createEnemy(kind, level.depth), x, z).rise();
-        this.events.emit('rise', { x, z });
-      },
+      events: guest ? this.mutedEvents : this.events,
+      hitPlayer: guest ? () => {} : (source, attack, knockback) => this.hitPlayer(source, attack, knockback),
+      fireProjectile: guest ? () => {} : (spec) => this.fireProjectile({ ...spec, owner: 'enemy' }),
+      explode: guest ? () => {} : (x, z, radius, base, source) => this.explode(x, z, radius, base, source),
+      spawnEnemy: guest
+        ? () => {}
+        : (kind, x, z) => {
+            this.spawn(createEnemy(kind, level.depth), x, z).rise();
+            this.events.emit('rise', { x, z });
+          },
       allies: () => this.enemies,
     };
     for (const c of level.chests) {
@@ -128,22 +164,204 @@ export class GameWorld {
     const variantRng = new Rng(level.seed * 131 + level.depth * 7 + 3);
     for (const s of level.spawns) {
       const e = createEnemy(s.kind, level.depth, level.boss);
-      const variant = s.kind === 'boss' || level.tutorial ? null : activeMods().variantFor(s.kind, level.depth, variantRng);
+      // Co-op floors skip mod variants so every player's copy of the floor matches.
+      const variant = s.kind === 'boss' || level.tutorial || this.role !== 'solo' ? null : activeMods().variantFor(s.kind, level.depth, variantRng);
       this.spawn(e, s.x, s.z);
       if (variant) this.applyVariant(e, variant);
       if (s.elite) e.makeElite();
       if (e instanceof Boss) this.boss = e;
     }
+    for (const [i, r] of this.remotes.entries()) r.setPosition(level.playerStart.x + (i % 2 ? 1 : -1), level.playerStart.z + 1 + i);
+    if (this.role === 'host') this.scaleForParty();
+  }
+
+  /** Every hero on the floor, this one first. */
+  get heroes(): Player[] {
+    return [this.player, ...this.remotes];
+  }
+
+  /** Living heroes monsters can go after. */
+  private targets(): Player[] {
+    const alive = this.heroes.filter((p) => p.alive);
+    return alive.length ? alive : [this.player];
+  }
+
+  private nearestHero(x: number, z: number): Player {
+    let best = this.player;
+    let bestD = Infinity;
+    for (const p of this.targets()) {
+      const d = (p.pos.x - x) ** 2 + (p.pos.z - z) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** Host: more heroes, tougher monsters (+60% health per extra player). Call when the party changes. */
+  scaleForParty(): void {
+    const scale = 1 + 0.6 * this.remotes.length;
+    const f = scale / this.partyScale;
+    this.partyScale = scale;
+    if (f === 1) return;
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      e.maxHp = Math.max(1, Math.round(e.maxHp * f));
+      e.hp = Math.max(1, Math.round(e.hp * f));
+    }
+  }
+
+  /** A hero's player id (this peer's own hero is `localId`). */
+  heroId(p: Player): number {
+    return p instanceof RemotePlayer ? p.netId : this.localId;
+  }
+
+  /** Host: another player's hero attacked; resolve it as if it were ours. */
+  remoteAction(r: RemotePlayer, kind: 'strike' | 'slam' | 'volley', x: number, z: number, facing: number): void {
+    if (!r.alive) return;
+    r.pos.x = x;
+    r.pos.z = z;
+    r.facing = facing;
+    if (kind === 'strike') this.resolvePlayerStrike(r);
+    else if (kind === 'slam') this.resolveSlam(r);
+    else this.resolveVolley(r);
+  }
+
+  /** Host: every living monster's state for guests. */
+  enemySnapshot(): EnemyState[] {
+    const out: EnemyState[] = [];
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      const kind = e.isBoss ? 7 : ENEMY_KINDS.indexOf(e.kind as (typeof ENEMY_KINDS)[number]);
+      const flags = (e.elite ? 1 : 0) | (e === this.boss && this.boss.engaged ? 2 : 0);
+      out.push([e.netId, kind, q2(e.pos.x), q2(e.pos.z), q2(e.facing), Math.ceil(e.hp), e.maxHp, flags]);
+    }
+    return out;
+  }
+
+  /** Guest: line the monsters up with the host's: add new ones (summons), move and update the rest, drop the dead. */
+  applyEnemySnapshot(list: EnemyState[]): void {
+    const byId = new Map(this.enemies.map((e) => [e.netId, e]));
+    const live = new Set<number>();
+    for (const [id, kind, x, z, f, hp, maxHp, flags] of list) {
+      live.add(id);
+      let e = byId.get(id);
+      if (!e) {
+        if (kind === 7) continue;
+        const k = ENEMY_KINDS[kind] as EnemyKind | undefined;
+        if (!k) continue;
+        e = this.spawn(createEnemy(k, this.level.depth), x, z, id);
+        if (flags & 1) e.makeElite();
+        e.rise();
+      }
+      e.net = { x, z, f };
+      e.maxHp = maxHp;
+      e.hp = Math.min(maxHp, hp);
+      if (e instanceof Boss && flags & 2) e.engaged = true;
+    }
+    for (const e of this.enemies) {
+      if (e.alive && !live.has(e.netId)) {
+        e.rewardsOnDeath = false;
+        e.applyDamage(1e9, 0, 0);
+      }
+    }
+  }
+
+  /** Guest: keep a monster on the host's track (its own AI only drives the animation). */
+  private followNet(e: Enemy, dt: number): void {
+    if (!e.net || !e.alive) return;
+    const dx = e.net.x - e.pos.x;
+    const dz = e.net.z - e.pos.z;
+    if (Math.hypot(dx, dz) > 3) {
+      e.pos.x = e.net.x;
+      e.pos.z = e.net.z;
+    } else {
+      const k = Math.min(1, dt * 8);
+      e.pos.x += dx * k;
+      e.pos.z += dz * k;
+    }
+    e.facing = e.net.f;
+  }
+
+  /** Guest: show a drop the host made. */
+  addNetPickup(id: number, drop: Drop, x: number, z: number, angle: number): void {
+    const p = new Pickup(drop, x, z, angle);
+    p.netId = id;
+    this.pickups.push(p);
+    this.root.add(p.group);
+  }
+
+  /** Guest: a drop was picked up (by anyone). */
+  removeNetPickup(id: number): void {
+    const i = this.pickups.findIndex((p) => p.netId === id);
+    if (i < 0) return;
+    this.root.remove(this.pickups[i].group);
+    this.pickups.splice(i, 1);
+  }
+
+  /** Guest: a chest was opened. */
+  openChestNet(index: number): void {
+    const c = this.chests[index];
+    if (c && !c.opened) c.open();
+  }
+
+  /** Host: a remote hero standing on a drop it can carry. */
+  private remoteTaker(p: Pickup): RemotePlayer | null {
+    for (const r of this.remotes) {
+      if (!r.alive || Math.hypot(p.pos.x - r.pos.x, p.pos.z - r.pos.z) > PICKUP_RANGE) continue;
+      if (p.drop.type === 'potion' ? !r.potionsFull : !r.bagFull) return r;
+    }
+    return null;
+  }
+
+  /** Add another player's hero to the floor. */
+  addRemote(r: RemotePlayer): void {
+    this.remotes.push(r);
+    this.root.add(r.object);
+    if (this.level) r.setPosition(this.level.playerStart.x, this.level.playerStart.z + 1);
+    if (this.role === 'host' && this.level) this.scaleForParty();
+  }
+
+  removeRemote(r: RemotePlayer): void {
+    const i = this.remotes.indexOf(r);
+    if (i < 0) return;
+    this.remotes.splice(i, 1);
+    this.root.remove(r.object);
+    if (this.role === 'host') this.scaleForParty();
+  }
+
+  /** Remove every other hero (leaving co-op). */
+  clearRemotes(): void {
+    for (const r of [...this.remotes]) this.removeRemote(r);
   }
 
   update(dt: number, input: PlayerInput, camera: THREE.Camera): void {
     const { player, level } = this;
+    const guest = this.role === 'guest';
     const wasDodging = player.dodging;
     player.update(dt, input, level.grid);
-    if (!wasDodging && player.dodging) this.events.emit('dodge', { ...player.pos, admin: player.ascendedArmor });
-    if (player.strikeReady) this.resolvePlayerStrike();
-    if (player.slamReady) this.resolveSlam();
-    if (player.volleyReady) this.resolveVolley();
+    for (const r of this.remotes) r.netUpdate(dt, level.grid);
+    if (!wasDodging && player.dodging) this.events.emit('dodge', { ...player.pos, admin: player.ascendedArmor, who: this.localId });
+    if (guest) {
+      // The host resolves our attacks; our own swing / slam / volley effects play right away.
+      if (player.strikeReady) {
+        this.net?.localAction('strike');
+        if (player.weapon.kind !== 'bow') this.events.emit('swing', { ...player.pos, who: this.localId });
+      }
+      if (player.slamReady) {
+        this.net?.localAction('slam');
+        this.events.emit('slam', { x: player.pos.x, z: player.pos.z, radius: SLAM_RADIUS, admin: player.ascendedArmor, who: this.localId });
+      }
+      if (player.volleyReady) {
+        this.net?.localAction('volley');
+        this.events.emit('volley', { x: player.pos.x, z: player.pos.z, facing: player.facing, admin: player.ascendedArmor, who: this.localId });
+      }
+    } else {
+      if (player.strikeReady) this.resolvePlayerStrike();
+      if (player.slamReady) this.resolveSlam();
+      if (player.volleyReady) this.resolveVolley();
+    }
     if (player.potionHealed > 0) this.events.emit('heal', { ...player.pos, amount: player.potionHealed });
     if (!player.alive && !this.deathAnnounced) {
       this.deathAnnounced = true;
@@ -152,22 +370,29 @@ export class GameWorld {
 
     this.calmTime += dt;
     if (this.boss?.alive && this.boss.engaged) this.calmTime = 0;
-    this.flow.update(player.pos.x, player.pos.z);
+    const heroes = this.heroes;
+    this.flow.updateMany(this.targets().map((p) => p.pos));
     for (const e of this.enemies) {
-      const near = Math.abs(e.pos.x - player.pos.x) < ACTIVE_RANGE && Math.abs(e.pos.z - player.pos.z) < ACTIVE_RANGE;
+      // Active near any hero.
+      const near = heroes.some((p) => Math.abs(e.pos.x - p.pos.x) < ACTIVE_RANGE && Math.abs(e.pos.z - p.pos.z) < ACTIVE_RANGE);
       e.object.visible = near;
-      if (near) e.update(dt, this.ctx, camera);
+      if (near) {
+        this.ctx.player = this.nearestHero(e.pos.x, e.pos.z);
+        e.update(dt, this.ctx, camera);
+        if (guest) this.followNet(e, dt);
+      }
       if (e.alive && Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z) < COMBAT_RANGE) this.calmTime = 0;
     }
-    this.separate();
+    this.ctx.player = player;
+    if (!guest) this.separate();
     this.projectiles.update(
       dt,
       level.grid,
-      (owner) => this.targetsFor(owner),
+      (owner) => (guest ? [] : this.targetsFor(owner)),
       (p, t) => this.onProjectileHit(p, t),
     );
 
-    for (const e of this.enemies) this.tickStatus(e, dt);
+    if (!guest) for (const e of this.enemies) this.tickStatus(e, dt);
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
       if (!e.alive && !e.deathReported) this.onEnemyDeath(e);
@@ -178,16 +403,18 @@ export class GameWorld {
     }
 
     this.updatePickups(dt);
-    for (const c of this.chests) {
-      if (!c.opened && player.alive && Math.hypot(c.x - player.pos.x, c.z - player.pos.z) < CHEST_RANGE) {
+    this.chests.forEach((c, i) => {
+      if (!guest && !c.opened && heroes.some((p) => p.alive && Math.hypot(c.x - p.pos.x, c.z - p.pos.z) < CHEST_RANGE)) {
         c.open();
         this.events.emit('chestOpened', { x: c.x, z: c.z });
+        this.net?.chestOpened(i);
         this.dropLoot(rollDrops(this.rng, 'chest', level.depth), c.x, c.z);
       }
       c.update(dt);
-    }
+    });
     this.portal.update(dt);
-    if (player.alive && this.portal.contains(player.pos.x, player.pos.z)) this.portalReached = true;
+    // Any living hero stepping in takes the whole party down (guests wait for the host to say so).
+    if (!guest && heroes.some((p) => p.alive && this.portal.contains(p.pos.x, p.pos.z))) this.portalReached = true;
     this.animateScenery(dt, camera);
   }
 
@@ -202,7 +429,8 @@ export class GameWorld {
     for (const r of this.runes) r.rotation.z += (r.userData.spin as number) * dt;
   }
 
-  spawn(enemy: Enemy, x: number, z: number): Enemy {
+  spawn(enemy: Enemy, x: number, z: number, netId = this.nextEnemyId++): Enemy {
+    enemy.netId = netId;
     enemy.compact();
     castShadows(enemy.object);
     const t = activeMods().tweaks;
@@ -236,7 +464,15 @@ export class GameWorld {
    * Deal damage to an enemy from the player; emits hit events. `proc` marks a
    * weapon hit, which can trigger the weapon's powers (power damage itself never does).
    */
-  damageEnemy(e: Enemy, attack: AttackStats, fromX: number, fromZ: number, knockback: number, proc = false): DamageResult | null {
+  damageEnemy(
+    e: Enemy,
+    attack: AttackStats,
+    fromX: number,
+    fromZ: number,
+    knockback: number,
+    proc = false,
+    attacker: Player = this.player,
+  ): DamageResult | null {
     const dmg = rollDamage(attack, e.armor, () => this.rng.next());
     const dx = e.pos.x - fromX;
     const dz = e.pos.z - fromZ;
@@ -250,16 +486,16 @@ export class GameWorld {
     if (!e.applyDamage(dmg.amount, (dx / len) * knockback, (dz / len) * knockback)) return null;
     this.calmTime = 0;
     this.events.emit('hit', { x: e.pos.x, z: e.pos.z, amount: dmg.amount, crit: dmg.crit, target: 'enemy' });
-    if (this.player.stats.lifeOnHit > 0) this.player.heal(this.player.stats.lifeOnHit);
-    if (proc) this.triggerPowers(e, dmg, attack);
+    if (attacker.stats.lifeOnHit > 0) attacker.heal(attacker.stats.lifeOnHit);
+    if (proc) this.triggerPowers(e, dmg, attack, attacker);
     return dmg;
   }
 
-  private triggerPowers(target: Enemy, dmg: DamageResult, attack: AttackStats): void {
+  private triggerPowers(target: Enemy, dmg: DamageResult, attack: AttackStats, attacker: Player): void {
     const { rng, events } = this;
     const at = { x: target.pos.x, z: target.pos.z };
     const scaled = (frac: number): AttackStats => ({ ...attack, base: attack.base * frac, critChance: 0 });
-    for (const p of this.player.weaponPowers) {
+    for (const p of attacker.weaponPowers) {
       switch (p.id) {
         case 'ignite': {
           const v = POWER_VALUES.ignite[p.tier];
@@ -363,8 +599,10 @@ export class GameWorld {
       this.kills++;
       this.events.emit('enemyDied', { x: e.pos.x, z: e.pos.z, kind: e.kind, xp: e.xp });
       const mods = activeMods();
-      const levels = this.player.gainXp(Math.round(xpForKill(e.xp * e.xpMult, this.level.depth) * mods.tweaks.xpMult));
+      const xp = Math.round(xpForKill(e.xp * e.xpMult, this.level.depth) * mods.tweaks.xpMult);
+      const levels = this.player.gainXp(xp);
       if (levels > 0) this.events.emit('levelUp', { level: this.player.progress.level });
+      this.net?.sharedXp(xp);
       const drops = rollDrops(this.rng, e.kind as DropSource, this.level.depth, mods.tweaks.dropMult);
       if (e.elite) drops.push(...rollDrops(this.rng, 'elite', this.level.depth));
       this.dropLoot(drops, e.pos.x, e.pos.z);
@@ -377,7 +615,8 @@ export class GameWorld {
         other.rewardsOnDeath = false;
         other.applyDamage(99999, 0, 0);
       }
-      this.events.emit('bossDefeated', { x: e.pos.x, z: e.pos.z, name: (e as Boss).name });
+      // Guests hear about it from the host.
+      if (this.role !== 'guest') this.events.emit('bossDefeated', { x: e.pos.x, z: e.pos.z, name: (e as Boss).name });
     }
   }
 
@@ -386,19 +625,20 @@ export class GameWorld {
   }
 
   private targetsFor(owner: ProjectileOwner): readonly ProjectileTarget[] {
-    return owner === 'enemy' ? this.playerTargets : this.enemies;
+    return owner === 'enemy' ? this.heroes : this.enemies;
   }
 
   private onProjectileHit(p: ProjectileSpec, target: ProjectileTarget): boolean {
     if (p.owner === 'enemy') {
-      const dmg = rollDamage(p.attack, this.player.armor, () => this.rng.next());
+      const hero = target as Player;
+      const dmg = rollDamage(p.attack, hero.armor, () => this.rng.next());
       // Dodging through arrows is allowed: invulnerable players don't consume them.
-      if (!this.player.applyDamage(dmg.amount, p.dirX * p.knockback, p.dirZ * p.knockback)) return false;
-      this.calmTime = 0;
-      this.events.emit('hit', { ...this.player.pos, amount: dmg.amount, crit: dmg.crit, target: 'player' });
+      if (!hero.applyDamage(dmg.amount, p.dirX * p.knockback, p.dirZ * p.knockback)) return false;
+      if (hero === this.player) this.calmTime = 0;
+      this.events.emit('hit', { ...hero.pos, amount: dmg.amount, crit: dmg.crit, target: 'player', who: this.heroId(hero) });
       return true;
     }
-    this.damageEnemy(target as Enemy, p.attack, target.pos.x - p.dirX, target.pos.z - p.dirZ, p.knockback, p.proc);
+    this.damageEnemy(target as Enemy, p.attack, target.pos.x - p.dirX, target.pos.z - p.dirZ, p.knockback, p.proc, p.shooter ?? this.player);
     return true;
   }
 
@@ -412,8 +652,10 @@ export class GameWorld {
       });
     drops.forEach((d, i) => {
       const p = new Pickup(d, x, z, (i / Math.max(1, drops.length)) * Math.PI * 2 + this.rng.range(0, 1));
+      p.netId = this.nextPickupId++;
       this.pickups.push(p);
       this.root.add(p.group);
+      this.net?.pickupSpawned(p);
     });
   }
 
@@ -422,6 +664,16 @@ export class GameWorld {
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];
       p.update(dt, (x, z) => level.grid.isWalkableAt(x, z));
+      // Guests only show drops; the host hands them out.
+      if (this.role === 'guest') continue;
+      const taker = p.collectible ? this.remoteTaker(p) : null;
+      if (taker) {
+        this.net?.remoteLoot(taker, p.drop);
+        this.net?.pickupTaken(p);
+        this.root.remove(p.group);
+        this.pickups.splice(i, 1);
+        continue;
+      }
       const d = Math.hypot(p.pos.x - player.pos.x, p.pos.z - player.pos.z);
       if (d > 2) p.warned = false;
       if (!player.alive || d > PICKUP_RANGE || !p.collectible) continue;
@@ -437,27 +689,26 @@ export class GameWorld {
         this.events.emit('bagFull', {});
       }
       if (taken) {
+        this.net?.pickupTaken(p);
         this.root.remove(p.group);
         this.pickups.splice(i, 1);
       }
     }
   }
 
-  private resolveSlam(): void {
-    const { player } = this;
-    this.events.emit('slam', { x: player.pos.x, z: player.pos.z, radius: SLAM_RADIUS, admin: player.ascendedArmor });
+  private resolveSlam(player: Player = this.player): void {
+    this.events.emit('slam', { x: player.pos.x, z: player.pos.z, radius: SLAM_RADIUS, admin: player.ascendedArmor, who: this.heroId(player) });
     const attack = { ...player.attackStats, base: 14 + player.stats.weaponDamage };
     for (const e of this.enemies) {
       if (!e.alive || Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z) > SLAM_RADIUS + e.radius) continue;
-      this.damageEnemy(e, attack, player.pos.x, player.pos.z, 10);
+      this.damageEnemy(e, attack, player.pos.x, player.pos.z, 10, false, player);
     }
   }
 
-  private resolveVolley(): void {
-    const { player } = this;
+  private resolveVolley(player: Player = this.player): void {
     const attack = { ...player.attackStats, base: 4 + player.stats.weaponDamage * 0.6 };
     const admin = player.ascendedArmor;
-    this.events.emit('volley', { x: player.pos.x, z: player.pos.z, facing: player.facing, admin });
+    this.events.emit('volley', { x: player.pos.x, z: player.pos.z, facing: player.facing, admin, who: this.heroId(player) });
     for (let i = 0; i < VOLLEY_ARROWS; i++) {
       const a = player.facing + (i / (VOLLEY_ARROWS - 1) - 0.5) * VOLLEY_SPREAD;
       this.fireProjectile({
@@ -470,6 +721,7 @@ export class GameWorld {
         attack,
         knockback: 3,
         owner: 'player',
+        shooter: player,
         // Thrown spears; admin armor throws lances of light that leave a trail.
         spear: admin ? { shaft: i % 2 ? 0xffd23f : 0x29ffe0, head: 0xffffff } : { shaft: 0x8a5a2b, head: 0xd7dde3 },
         ...(admin ? { trail: i % 2 ? 0xffd23f : 0x29ffe0 } : {}),
@@ -477,8 +729,7 @@ export class GameWorld {
     }
   }
 
-  private resolvePlayerStrike(): void {
-    const { player } = this;
+  private resolvePlayerStrike(player: Player = this.player): void {
     const w = player.weapon;
     if (w.kind === 'bow') {
       this.fireProjectile({
@@ -492,40 +743,41 @@ export class GameWorld {
         knockback: w.knockback,
         owner: 'player',
         proc: true,
+        shooter: player,
       });
       return;
     }
-    this.events.emit('swing', { ...player.pos });
+    this.events.emit('swing', { ...player.pos, who: this.heroId(player) });
     for (const e of this.enemies) {
       if (!e.alive) continue;
       if (!inArc(player.pos.x, player.pos.z, player.facing, e.pos.x, e.pos.z, w.range, w.arc, e.radius)) continue;
-      this.damageEnemy(e, player.attackStats, player.pos.x, player.pos.z, w.knockback, true);
+      this.damageEnemy(e, player.attackStats, player.pos.x, player.pos.z, w.knockback, true, player);
     }
   }
 
   private hitPlayer(source: Enemy, attack: AttackStats, knockback: number): void {
-    const { player } = this;
+    const player = this.ctx.player;
     const dmg = rollDamage(attack, player.armor, () => this.rng.next());
     const dx = player.pos.x - source.pos.x;
     const dz = player.pos.z - source.pos.z;
     const len = Math.hypot(dx, dz) || 1;
     if (player.applyDamage(dmg.amount, (dx / len) * knockback, (dz / len) * knockback)) {
-      this.calmTime = 0;
-      this.events.emit('hit', { x: player.pos.x, z: player.pos.z, amount: dmg.amount, crit: dmg.crit, target: 'player' });
+      if (player === this.player) this.calmTime = 0;
+      this.events.emit('hit', { x: player.pos.x, z: player.pos.z, amount: dmg.amount, crit: dmg.crit, target: 'player', who: this.heroId(player) });
     }
   }
 
   private explode(x: number, z: number, radius: number, base: number, source: Enemy): void {
     this.events.emit('explosion', { x, z, radius });
-    const p = this.player;
-    const pd = Math.hypot(p.pos.x - x, p.pos.z - z);
-    const playerDmg = falloffDamage(base, pd, radius + p.radius);
-    if (playerDmg > 0) {
+    for (const p of this.heroes) {
+      const pd = Math.hypot(p.pos.x - x, p.pos.z - z);
+      const playerDmg = falloffDamage(base, pd, radius + p.radius);
+      if (playerDmg <= 0) continue;
       const amount = Math.max(1, Math.round(playerDmg * (100 / (100 + p.armor))));
       const len = pd || 1;
       if (p.applyDamage(amount, ((p.pos.x - x) / len) * 12, ((p.pos.z - z) / len) * 12)) {
-        this.calmTime = 0;
-        this.events.emit('hit', { ...p.pos, amount, crit: false, target: 'player' });
+        if (p === this.player) this.calmTime = 0;
+        this.events.emit('hit', { ...p.pos, amount, crit: false, target: 'player', who: this.heroId(p) });
       }
     }
     for (const e of this.enemies) {
@@ -539,7 +791,8 @@ export class GameWorld {
 
   /** Push overlapping enemies apart and off the player. */
   private separate(): void {
-    const { enemies, player, level } = this;
+    const { enemies, level } = this;
+    const heroes = this.heroes;
     for (let i = 0; i < enemies.length; i++) {
       const a = enemies[i];
       if (!a.alive) continue;
@@ -558,7 +811,8 @@ export class GameWorld {
         level.grid.moveBox(a.pos, -nx * push, -nz * push, a.radius);
         level.grid.moveBox(b.pos, nx * push, nz * push, b.radius);
       }
-      if (player.alive && !player.dodging) {
+      for (const player of heroes) {
+        if (!player.alive || player.dodging) continue;
         const dx = a.pos.x - player.pos.x;
         const dz = a.pos.z - player.pos.z;
         const min = a.radius + player.radius;

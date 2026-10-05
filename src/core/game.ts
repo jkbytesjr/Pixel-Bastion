@@ -18,7 +18,11 @@ import { CharacterPanel } from '../ui/characterPanel';
 import { buildRuneBurst } from '../entities/gearModel';
 import { ModsPanel } from '../ui/modsPanel';
 import { ModManager } from '../systems/modLoader';
-import { activeMods } from '../systems/mods';
+import { ModRegistry, activeMods, setActiveMods } from '../systems/mods';
+import { CoopSession, type CoopGame } from '../net/coop';
+import { makeRoomCode, normalizeRoomCode } from '../net/protocol';
+import { CoopPanel } from '../ui/coopPanel';
+import { PartyHud } from '../ui/partyHud';
 import { loadAppearance, storeAppearance } from '../systems/appearance';
 import { TUTORIAL_BOSS_HP, buildTutorial, lessonFor, newTutorialProgress, roomAt, type TutorialProgress } from '../world/tutorial';
 import type { Dungeon } from '../world/dungeonGen';
@@ -145,6 +149,14 @@ export class Game {
   private readonly character: CharacterPanel;
   private readonly modsPanel: ModsPanel;
   private readonly tutorialPrompt: TutorialPrompt;
+  private readonly coopPanel: CoopPanel;
+  private readonly partyHud: PartyHud;
+  /** The co-op session, while hosting or in someone else's game. */
+  coop: CoopSession | null = null;
+  /** Mods are switched off during co-op so every player's game matches; restored afterwards. */
+  private soloMods = activeMods();
+  /** The floor being loaded starts a new run (co-op: everyone starts over). */
+  private freshRun = false;
   readonly mods = new ModManager();
   /** Playing the tutorial floor rather than a real run. */
   tutorial = false;
@@ -209,8 +221,10 @@ export class Game {
     const hudRoot = document.getElementById('hud')!;
     this.world = new GameWorld(this.scene, this.events);
     this.hud = new Hud(hudRoot, () => this.restart());
-    this.hud.onNewRun = () => this.startRun(randomSeed());
-    this.hud.onMenu = () => this.showMenu();
+    this.hud.onNewRun = () => {
+      if (!this.coop || this.coop.isHost) this.startRun(randomSeed());
+    };
+    this.hud.onMenu = () => (this.coop ? this.leaveCoop() : this.showMenu());
     this.hud.setMuted(this.sfx.isMuted);
     this.damageNumbers = new DamageNumbers(hudRoot);
     this.minimap = new Minimap(hudRoot);
@@ -221,6 +235,10 @@ export class Game {
     this.pause.onResume = () => this.pause.setOpen(false);
     this.pause.onControls = () => this.hud.toggleControls(true);
     this.pause.onSaveQuit = () => {
+      if (this.coop) {
+        this.leaveCoop();
+        return;
+      }
       this.saveRun();
       this.showMenu();
     };
@@ -253,6 +271,20 @@ export class Game {
       this.modsPanel.show();
     };
     this.menu.onTutorial = () => this.startTutorial();
+    this.menu.onCoop = () => this.openCoop();
+    this.coopPanel = new CoopPanel(hudRoot);
+    this.coopPanel.onBack = () => {
+      this.coopPanel.hide();
+      this.menu.show({ save: loadSave(), best: loadBestFloor(), moveMode: this.moveMode, muted: this.sfx.isMuted, mods: this.mods.activeCount });
+    };
+    this.coopPanel.onHost = (name) => void this.hostCoop(name);
+    this.coopPanel.onJoin = (name, code) => void this.joinCoop(name, code);
+    this.coopPanel.onStart = () => {
+      this.coopPanel.hide();
+      this.startRun(randomSeed());
+    };
+    this.coopPanel.onLeave = () => this.leaveCoop();
+    this.partyHud = new PartyHud(hudRoot);
     this.character = new CharacterPanel(hudRoot);
     this.character.onChange = (look) => {
       storeAppearance(look);
@@ -276,6 +308,9 @@ export class Game {
     const seed = urlSeed();
     if (seed !== null) this.startRun(seed);
     else this.showMenu();
+    // Invite links (?join=CODE) open the co-op screen with the code filled in.
+    const invite = new URLSearchParams(window.location.search).get('join');
+    if (invite && seed === null) this.openCoop(normalizeRoomCode(invite) ?? '');
     window.addEventListener('resize', this.onResize);
     if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = this;
   }
@@ -475,6 +510,12 @@ export class Game {
       sfx.chest();
     });
     events.on('playerDied', () => {
+      if (this.coop) {
+        // The run goes on while anyone is standing; down players come back on the next floor.
+        hud.toast('You are down! You will be back on the next floor.', 'danger');
+        sfx.playerDied();
+        return;
+      }
       // Death ends the run for good: the save goes with it (the tutorial never touches it).
       if (!this.tutorial) clearSave();
       hud.showDeath(this.runSummary());
@@ -536,6 +577,10 @@ export class Game {
 
   /** Begin a fresh run from floor 1. */
   startRun(seed: number): void {
+    // In co-op only the host starts runs.
+    if (this.coop && !this.coop.isHost) return;
+    this.freshRun = true;
+    this.coopPanel.hide();
     this.tutorial = false;
     this.pendingSeed = 0;
     this.hud.setTutorial(null);
@@ -643,12 +688,13 @@ export class Game {
 
   /** Save the run (only while playing and alive; a dead run has nothing to resume). */
   saveRun(): boolean {
-    if (this.mode !== 'playing' || this.tutorial || !this.world.player.alive) return false;
+    if (this.mode !== 'playing' || this.tutorial || this.coop || !this.world.player.alive) return false;
     return writeSave(this.makeSave());
   }
 
   /** Death restart: same seed, back to floor 1. */
   restart(): void {
+    if (this.coop && !this.coop.isHost) return;
     if (this.tutorial) this.startTutorial();
     else this.startRun(this.seed);
   }
@@ -658,6 +704,8 @@ export class Game {
     const level: Dungeon = this.tutorial ? buildTutorial() : generateDungeon(this.seed, depth);
     this.world.load(level);
     this.applyAtmosphere(level);
+    if (this.coop?.isHost) this.coop.floorLoaded(this.freshRun);
+    this.freshRun = false;
     for (const d of this.decals) this.scene.remove(d.mesh);
     this.decals.length = 0;
     if (this.tutorial && this.world.boss) {
@@ -683,6 +731,8 @@ export class Game {
   }
 
   private get paused(): boolean {
+    // Co-op never pauses: the others are still playing.
+    if (this.coop && this.mode === 'playing') return false;
     return (
       this.mode === 'menu' ||
       this.admin.open ||
@@ -757,6 +807,11 @@ export class Game {
     this.composer.render(dt);
     this.fps.tick(time, this.renderer.info.render.calls);
     this.adaptResolution(dt);
+    if (this.coop) {
+      this.coop.update(dt);
+      if (this.mode === 'playing')
+        this.partyHud.update({ name: this.coop.name, hero: this.world.player }, this.world.remotes, this.coop.code, this.rig.camera, window.innerWidth, window.innerHeight);
+    }
     this.input.endFrame();
   };
 
@@ -764,6 +819,128 @@ export class Game {
   private setAdminMode(on: boolean): void {
     this.hud.setAdmin(on);
     this.world.player.levelCap = on ? ADMIN_MAX_LEVEL : MAX_LEVEL;
+  }
+
+  // ---- Co-op ----
+
+  /** Title screen → co-op screen (optionally with an invite code filled in). */
+  openCoop(code = ''): void {
+    this.menu.hide();
+    if (this.coop) this.refreshLobby(true);
+    else this.coopPanel.show(code);
+  }
+
+  private coopGame(): CoopGame {
+    return {
+      world: this.world,
+      events: this.events,
+      look: () => this.world.player.appearance,
+      seed: () => this.seed,
+      depth: () => this.depth,
+      playFloor: (seed, depth, fresh) => this.playCoopFloor(seed, depth, fresh),
+      partyWiped: () => {
+        this.hud.setDeathMode(this.coop?.isHost ? 'host' : 'guest');
+        this.hud.showDeath(this.runSummary());
+      },
+      lobbyChanged: () => this.refreshLobby(),
+      ended: (reason) => this.leaveCoop(reason),
+      toast: (text, tone) => {
+        if (this.mode === 'playing') this.hud.toast(text, tone);
+      },
+    };
+  }
+
+  private async hostCoop(name: string): Promise<void> {
+    this.coopPanel.busy('Opening a room…');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        this.coop = await CoopSession.host(makeRoomCode(Math.random), name, this.coopGame());
+        this.enterCoop('host');
+        this.refreshLobby(true);
+        return;
+      } catch (err) {
+        // A code clash just needs another code; anything else is reported.
+        if (!(err as Error).message.includes('taken') || attempt === 2) {
+          this.coopPanel.fail((err as Error).message);
+          return;
+        }
+      }
+    }
+  }
+
+  private async joinCoop(name: string, text: string): Promise<void> {
+    const code = normalizeRoomCode(text);
+    if (!code) {
+      this.coopPanel.fail('Room codes are 5 letters and numbers, like K7Q2M.');
+      return;
+    }
+    this.coopPanel.busy(`Joining ${code}…`);
+    // Set up as a guest first: the host may send the floor right after letting us in.
+    this.enterCoop('guest');
+    try {
+      this.coop = await CoopSession.join(code, name, this.coopGame());
+      this.world.localId = this.coop.localId;
+      this.refreshLobby(true);
+    } catch (err) {
+      this.exitCoopMode();
+      this.coopPanel.fail((err as Error).message);
+    }
+  }
+
+  /** Switch the world to co-op rules. */
+  private enterCoop(role: 'host' | 'guest'): void {
+    this.soloMods = activeMods();
+    setActiveMods(new ModRegistry());
+    this.world.role = role;
+    this.world.localId = this.coop?.localId ?? 0;
+    this.pause.setCoop(true);
+  }
+
+  private exitCoopMode(): void {
+    this.world.role = 'solo';
+    this.world.localId = 0;
+    this.world.net = null;
+    this.world.clearRemotes();
+    setActiveMods(this.soloMods);
+    this.pause.setCoop(false);
+    this.partyHud.clear();
+    this.hud.setDeathMode('solo');
+  }
+
+  /** Leave co-op (closing the room if hosting) and go back to the title screen. */
+  leaveCoop(reason?: string): void {
+    this.coop?.close();
+    this.coop = null;
+    this.exitCoopMode();
+    this.coopPanel.hide();
+    this.showMenu();
+    if (reason) {
+      this.menu.hide();
+      this.coopPanel.show();
+      this.coopPanel.fail(reason);
+    }
+  }
+
+  /** Lobby screen, if it's showing (or `force` to show it). */
+  private refreshLobby(force = false): void {
+    if (!this.coop || (!force && !this.coopPanel.open)) return;
+    const players = [...this.coop.players.values()].sort((a, b) => a.id - b.id);
+    this.coopPanel.showLobby(this.coop.code, this.coop.isHost, players, this.coop.localId);
+  }
+
+  /** Guest: the host started a run or moved the party to a floor. */
+  private playCoopFloor(seed: number, depth: number, fresh: boolean): void {
+    this.coopPanel.hide();
+    this.menu.hide();
+    if (this.mode !== 'playing') this.enterPlay();
+    this.tutorial = false;
+    this.seed = seed;
+    if (fresh) {
+      this.world.player.resetProgress();
+      this.runTime = 0;
+      this.world.kills = 0;
+    }
+    this.loadFloor(depth);
   }
 
   /** Run an admin console command; returns the text to show. */
@@ -785,6 +962,8 @@ export class Game {
         .join('\n');
     }
     if (this.mode !== 'playing') return 'Start a run first (this command works in-game).';
+    if (this.coop && !this.coop.isHost && ['floor', 'boss', 'portal', 'killall', 'spawn'].includes(name))
+      return 'Only the host can change the shared dungeon in co-op.';
 
     switch (name) {
       case 'god':
@@ -1022,7 +1201,7 @@ export class Game {
     }
     if (input.wasPressed('F3')) this.fps.toggle();
     if (input.wasPressed('KeyM')) this.hud.setMuted(this.sfx.toggleMute());
-    if (input.wasPressed('KeyR') && !world.player.alive) this.restart();
+    if (input.wasPressed('KeyR') && !world.player.alive && (!this.coop || this.coop.isHost) && this.hud.deathShown) this.restart();
     if (input.wasPressed('KeyH') && !this.inventory.open && !this.levelUp.open) this.hud.toggleControls();
     if (this.pause.open) return;
     if (

@@ -19,6 +19,7 @@ Nothing is pre-made: dungeon layouts, character models, loot and sound effects a
 - **Real-time combat**: mouse-aimed melee and bow attacks, a dodge roll with brief invulnerability, a ground slam, a spear volley and health potions.
 - **Loot** in four rarities (common, rare, unique, mythic) with random stat modifiers. Unique and mythic weapons carry special powers like Chain Lightning and Ignite. Your equipped armor and weapon show on your character.
 - **Level-up choices**: each level offers three random attributes to pick from. The choice waits until you're out of combat (or press L), so it never interrupts a fight. Levels come faster the deeper you go.
+- **Online co-op**: play with up to 3 friends. One player hosts and shares a room code or invite link, and everyone fights through the same dungeon together. No server or sign-up needed.
 - **Tutorial**: a short six-room walkthrough of moving, fighting, dodging, abilities, loot and a boss. New runs offer it first.
 - **Character creator**: pick skin, hair style and colour, beard, eyes, tunic, scarf, trousers and boots, with a live preview.
 - **Mods**: JSON files that tweak the rules, add items to the loot tables and add new enemy variants. Switch them on and off from the title screen.
@@ -54,6 +55,16 @@ npm run dev
 Then open http://localhost:5173. The title screen lets you start a new run, continue a saved one, type in a seed, customise your character or manage mods. A new run asks whether you want the tutorial first. You can turn that question off, and the tutorial stays available from the title screen. Sound starts after your first click or key press.
 
 The same seed always produces the same floors, bosses and level-up offers. You can also skip the title screen and jump straight into a seed with a URL like `http://localhost:5173/?seed=12345`.
+
+**Co-op.** Choose *Co-op* on the title screen, enter a name and pick *Host a game*. Share the 5-letter room code or the invite link, and friends join with *Co-op → Join* (or by opening the link). The host starts the run, and friends can also join after it has started. Everyone keeps their own character, gear, level and attributes:
+
+- Every kill gives XP to the whole party.
+- Loot goes to whoever walks over it.
+- Monsters get 60% more health for each extra player.
+- Stepping into the portal takes the whole party down a floor.
+- A player who falls comes back on the next floor. The run ends only when everyone is down, and then the host can restart it for all.
+
+Co-op doesn't pause, isn't saved, and runs with mods off so every player's game matches. Players connect directly to each other over WebRTC, using the free public PeerJS service only to find each other. A very strict school or work network can block that connection.
 
 **Mods.** Mods are JSON files in `public/mods/`, listed in `public/mods/index.json`. You can also import one from *Mods* on the title screen. A mod can change rules such as XP, drop rates, enemy health and your damage. It can also add weapons and armor to the loot tables, and add recoloured, resized or tougher variants of existing enemies. Mods are plain data and never run code. `public/mods/example-mod.json` shows every option and ships switched off. The full format is in [`public/mods/README.md`](public/mods/README.md).
 
@@ -134,9 +145,10 @@ Floor 1 is always the Colossus, and floors 2–4 bring the other three in an ord
 ```sh
 npm run lint && npm run typecheck && npm test   # run before every commit
 npm run smoke                                    # headless browser test
+npm run smoke:coop                               # two-player co-op test
 ```
 
-- **Unit tests** (`npm test`, Vitest) cover the pure game logic: dungeon generation and boss order, the collision grid, damage formulas, loot rolls and weapon powers, inventory, leveling pace and attribute picks, save validation, mod validation and merging, character looks, the tutorial layout, pathfinding, the fixed-step clock and minimap exploration.
+- **Unit tests** (`npm test`, Vitest) cover the pure game logic: dungeon generation and boss order, the collision grid, damage formulas, loot rolls and weapon powers, inventory, leveling pace and attribute picks, save validation, co-op messages, mod validation and merging, character looks, the tutorial layout, pathfinding, the fixed-step clock and minimap exploration.
 - **Smoke test** (`npm run smoke`) starts the dev server and plays the game in headless Chromium with Playwright. It checks movement (including walking toward the mouse), combat, every enemy type (including spider lunges, shield blocking, shaman healing and wraith blinks), elites and summons, ten floors and their bosses, the boss-defeated banner, the death summary, loot, every weapon power, inventory, abilities, level-ups, the pause menu, saving and continuing, the title screen, the character creator, the mods screen, the tutorial, effects and the HUD. It fails on any console error or warning, and saves screenshots to `smoke-out/`. Install the browser once with `npx playwright install chromium`.
 
 ### Project layout
@@ -147,7 +159,8 @@ src/
   world/     Dungeon generator, tutorial floor, tile grid and collision, voxel level builder, torches, fog of war
   entities/  Player and gear models, enemies, bosses (bosses/), chests, pickups, portal
   systems/   Damage, loot, weapon powers, inventory, leveling, attributes, saves, mods, character looks, projectiles, pathfinding, particles, audio
-  ui/        Title and pause menus, character creator, mods screen, HUD, minimap, inventory, level-up screen, damage numbers, FPS meter
+  net/       Co-op: room codes, the message protocol, connections (PeerJS / WebRTC) and keeping players in sync
+  ui/        Title and pause menus, co-op lobby and party HUD, character creator, mods screen, HUD, minimap, inventory, level-up screen, damage numbers, FPS meter
 public/mods/ Mod files, the example mod and the mod format guide
 tests/       Vitest unit tests
 scripts/     Playwright smoke test
