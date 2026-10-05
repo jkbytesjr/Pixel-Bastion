@@ -291,6 +291,48 @@ describe('floor features', () => {
     expect(pockets).toBeGreaterThan(0);
   });
 
+  it('hide one rift per floor behind a cracked wall, sealed by a plate puzzle and a brazier trial', () => {
+    let rifts = 0;
+    let floors = 0;
+    for (const seed of SEEDS)
+      for (const depth of [0, 1, 4, 8]) {
+        floors++;
+        const d = generateDungeon(seed, depth);
+        expect(d.portals.filter((p) => p.kind === 'pocket').length).toBeLessThanOrEqual(1);
+        const rift = d.rift;
+        if (!rift) {
+          expect(d.portals.some((p) => p.kind === 'pocket')).toBe(false);
+          continue;
+        }
+        rifts++;
+        const w = d.grid.width;
+        const at = (dist: Int32Array, p: { x: number; z: number }) => dist[Math.floor(p.z) * w + Math.floor(p.x)];
+        const portal = d.portals.find((p) => p.id === rift.portalId)!;
+        expect(portal.kind).toBe('pocket');
+        // The rift sits in a room behind its cracked wall: out of reach until the wall breaks.
+        expect(d.gates.find((g) => g.id === rift.gateId)?.kind).toBe('secret');
+        const noPortals = reachability(d.grid, d.playerStart, { gatesOpen: false });
+        expect(at(noPortals, portal.a)).toBe(-1);
+        expect(at(reachability(d.grid, d.playerStart, { gatesOpen: true }), portal.a)).toBeGreaterThanOrEqual(0);
+        // Both seals can be worked on from the start, without breaking any wall.
+        const seal = d.puzzles[rift.puzzle];
+        expect(seal.gateId).toBeNull();
+        for (const p of [...seal.plates, seal.obelisk, ...rift.braziers]) expect(at(noPortals, p)).toBeGreaterThanOrEqual(0);
+        expect(rift.braziers).toHaveLength(4);
+        expect(rift.burn).toBeGreaterThanOrEqual(4);
+        // The braziers can be reached in time at walking speed.
+        const b = rift.braziers;
+        let run = 0;
+        for (let i = 1; i < b.length; i++) run += Math.hypot(b[i].x - b[i - 1].x, b[i].z - b[i - 1].z);
+        expect(run / 5).toBeLessThan(rift.burn);
+        // Nothing else shares a tile with the seals or the rift.
+        const tiles = [...seal.plates, seal.obelisk, ...rift.braziers, portal.a].map((p) => `${Math.floor(p.x)},${Math.floor(p.z)}`);
+        expect(new Set(tiles).size).toBe(tiles.length);
+        for (const c of d.chests) expect(tiles).not.toContain(`${Math.floor(c.x)},${Math.floor(c.z)}`);
+      }
+    expect(rifts).toBeGreaterThanOrEqual(floors * 0.9);
+  });
+
   it('hide secret rooms and a plate vault behind single gate tiles, each with rich loot', () => {
     let secrets = 0;
     let vaults = 0;
@@ -306,7 +348,8 @@ describe('floor features', () => {
         expect(pz.plates).toHaveLength(3);
         expect([...pz.order].sort()).toEqual([0, 1, 2]);
         for (const p of pz.plates) expect(d.grid.isWalkableAt(p.x, p.z)).toBe(true);
-        expect(d.gates.find((g) => g.id === pz.gateId)?.kind).toBe('vault');
+        if (pz.gateId === null) expect(d.rift?.puzzle).toBe(pz.id);
+        else expect(d.gates.find((g) => g.id === pz.gateId)?.kind).toBe('vault');
       }
       const rich = d.chests.filter((c) => c.rich).length;
       expect(rich).toBeGreaterThanOrEqual(d.gates.filter((g) => g.kind !== 'boss').length);

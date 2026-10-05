@@ -29,6 +29,14 @@ export interface GameEvents {
   /** A pressure plate was stepped on (in order or not), and the whole puzzle solved. */
   plate: { x: number; z: number; ok: boolean };
   puzzleSolved: { x: number; z: number };
+  /** A rift brazier was lit (`lit` of `total`; the first starts a `burn`-second clock), or they all burned out. */
+  brazier: { x: number; z: number; lit: number; total: number; burn: number };
+  braziersOut: { x: number; z: number };
+  /** One of the rift's seals broke, and when the rift woke. */
+  riftSeal: { x: number; z: number; seals: number; total: number };
+  riftOpen: { x: number; z: number };
+  /** The local hero reached the rift while it's still sealed. */
+  riftDormant: { seals: number; total: number };
   /** This player's hero went through a mini-portal (`pocket`: into a pocket dimension). */
   warp: { x: number; z: number; pocket: boolean };
   /** A boss entered a harder phase (2: enraged, 3: desperate). */

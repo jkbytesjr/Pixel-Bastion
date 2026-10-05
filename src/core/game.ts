@@ -46,6 +46,7 @@ import { Minimap } from '../ui/minimap';
 import { LevelUpPanel } from '../ui/levelUpPanel';
 import { rollPerkChoices } from '../systems/perks';
 import { hashSeed } from './rng';
+import { RIFT_COLOR } from '../entities/fixtures';
 
 /** Longest real frame we account for; anything longer (tab switch, debugger) is dropped. */
 const MAX_FRAME = 0.25;
@@ -547,11 +548,36 @@ export class Game {
       hud.toast('Puzzle solved! A vault opens.', 'good');
       sfx.pickup('mythic');
     });
+    events.on('brazier', (e) => {
+      fx.burst(e.x, 1.1, e.z, { count: 16, color: RIFT_COLOR, color2: 0xffffff, speed: [0.5, 2], up: [2, 4], life: [0.3, 0.7] });
+      sfx.pickup('rare');
+      if (e.lit === 1) hud.toast(`A violet flame! Light all ${e.total} braziers within ${e.burn} seconds`, 'info');
+    });
+    events.on('braziersOut', () => {
+      sfx.denied();
+      hud.toast('The flames died: light the braziers faster', 'danger');
+    });
+    events.on('riftSeal', (e) => {
+      fx.burst(e.x, 1, e.z, { count: 40, color: RIFT_COLOR, color2: 0xffffff, speed: [1, 4], up: [3, 7], life: [0.6, 1.1] });
+      fx.ring(e.x, e.z, 2.5, RIFT_COLOR, 30);
+      sfx.pickup('mythic');
+      if (e.seals < e.total) hud.toast(`A rift seal breaks (${e.seals}/${e.total})… something hidden stirs`, 'loot');
+    });
+    events.on('riftOpen', (e) => {
+      hud.toast('Both seals are broken: a hidden rift has woken (violet mark on the map)', 'good');
+      fx.burst(e.x, 1, e.z, { count: 50, color: RIFT_COLOR, color2: 0xffffff, speed: [1, 4], up: [3, 8], life: [0.8, 1.4] });
+      rig.shake(0.3, 0.4);
+      sfx.levelUp();
+    });
+    events.on('riftDormant', (e) => {
+      sfx.denied();
+      hud.toast(`A dormant rift, bound by ${e.total} seals (${e.seals} broken). Seek a violet obelisk and violet braziers.`, 'info');
+    });
     events.on('warp', (e) => {
       // Our own hero went through a mini-portal: the camera jumps with them.
       this.rig.snapTo(this.focus.set(e.x, 0, e.z));
       sfx.portal();
-      if (e.pocket) hud.toast('A pocket dimension…', 'info');
+      if (e.pocket) hud.toast('You cross into another dimension…', 'info');
     });
     events.on('bossPhase', (e) => {
       hud.toast(e.phase === 3 ? `${e.name} is desperate!` : `${e.name} is enraged!`, 'danger');
@@ -1427,7 +1453,12 @@ export class Game {
     }
     const f = world.features;
     const site = world.level.capture;
-    if (site && !f.bossOpen) {
+    const trial = f.brazierTrial;
+    if (trial && !trial.solved && trial.litCount > 0) {
+      // The brazier clock is running: that's the thing to watch.
+      const left = trial.left / trial.burn;
+      this.hud.setObjective(`◆ Light the braziers (${trial.litCount}/${trial.lit.length})`, { progress: left, state: left < 0.3 ? 'contested' : 'capturing', label: `${Math.ceil(trial.left)}s before the flames die` });
+    } else if (site && !f.bossOpen) {
       const p = world.player;
       const near = Math.hypot(p.pos.x - site.x, p.pos.z - site.z) < site.radius + 4;
       const c = f.capture;
@@ -1514,6 +1545,8 @@ export class Game {
   /** Teleport the player next to the boss / portal (smoke-test helper). */
   debugTeleport(x: number, z: number): void {
     this.world.player.setPosition(x, z);
+    // The camera jumps too, so what's on screen matches at once (as through a portal).
+    this.rig.snapTo(this.focus.set(x, 0, z));
   }
 
   /** Remove non-boss enemies and spawn one enemy at an offset from the player. */

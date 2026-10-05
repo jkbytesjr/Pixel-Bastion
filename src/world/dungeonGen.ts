@@ -5,7 +5,7 @@
 import { Rng, hashSeed } from '../core/rng';
 import { Tile, TileGrid } from './grid';
 import { placeTorches, type Level } from './level';
-import { addFeatures, type CaptureSite, type Gate, type PlatePuzzle, type PortalLink } from './features';
+import { addFeatures, type CaptureSite, type Gate, type PlatePuzzle, type PortalLink, type Rift } from './features';
 
 /** pocket: a sealed pocket dimension (via mini-portal). vault / secret: hidden behind a gate. */
 export type RoomKind = 'start' | 'normal' | 'treasure' | 'boss' | 'pocket' | 'vault' | 'secret';
@@ -50,6 +50,8 @@ export interface Dungeon extends Level {
   capture: CaptureSite | null;
   portals: PortalLink[];
   puzzles: PlatePuzzle[];
+  /** The hidden rift into another dimension (null if the floor has none). */
+  rift: Rift | null;
   /** The hand-built tutorial floor. */
   tutorial?: boolean;
 }
@@ -261,8 +263,12 @@ export function generateDungeon(seed: number, depth: number): Dungeon {
     start: playerStart,
     taken: used,
     addChest: (p, rich) => chests.push({ x: p.x, z: p.z, ...(rich ? { rich: true } : {}) }),
-    addSpawns: (room, spots) =>
-      spots.forEach((p, i) => spawns.push({ kind: featureRng.weighted(enemyWeights(depth)), x: p.x, z: p.z, roomId: room.id, elite: i === 0 })),
+    addSpawns: (room, spots) => {
+      // An elite leads; the rest are one kind (so spiders still come in packs).
+      const lead = featureRng.weighted(enemyWeights(depth));
+      const pack = featureRng.weighted(enemyWeights(depth));
+      spots.forEach((p, i) => spawns.push({ kind: i === 0 && (lead !== 'spider' || pack === 'spider') ? lead : pack, x: p.x, z: p.z, roomId: room.id, elite: i === 0 }));
+    },
   });
   return {
     seed,

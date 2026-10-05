@@ -5,6 +5,9 @@ import type { CaptureState } from '../systems/objectives';
 import type { Gate, PortalLink } from '../world/features';
 import { groundAt } from '../world/terrain';
 
+/** The rift's colour: its portal, brazier flames and the crystal on its obelisk. */
+export const RIFT_COLOR = 0xb060ff;
+
 /** The three plate / gem colours of a plate puzzle. */
 export const PLATE_COLORS = [0xff4a3a, 0x5aff6a, 0x4a9aff] as const;
 
@@ -89,6 +92,11 @@ export class GateView {
       (c.material as THREE.MeshBasicMaterial).color.setHex(0xffb04a).multiplyScalar(0.5 + this.cracks * 0.8);
       c.scale.x = 1 + this.cracks;
     }
+  }
+
+  /** The rift behind this cracked wall has woken: its fissures glow violet. */
+  hint(): void {
+    for (const c of this.crackGlow) (c.material as THREE.MeshBasicMaterial).color.setHex(RIFT_COLOR).multiplyScalar(1.6 + this.cracks * 0.4);
   }
 
   open(): void {
@@ -182,6 +190,8 @@ export class PlatesView {
     plates: readonly { x: number; z: number }[],
     obelisk: { x: number; z: number },
     private readonly order: readonly number[],
+    /** A rift seal: the obelisk wears a violet crystal. */
+    rift = false,
   ) {
     plates.forEach((p, i) => {
       const g = new THREE.Group();
@@ -200,6 +210,12 @@ export class PlatesView {
     ob.position.set(obelisk.x, groundAt(obelisk.x, obelisk.z), obelisk.z);
     ob.add(voxelBox([0.5, 0.2, 0.5], 0x4a4652, [0, 0.1, 0]), voxelBox([0.36, 1.5, 0.36], 0x6a6672, [0, 0.95, 0]), voxelBox([0.18, 0.2, 0.18], 0x6a6672, [0, 1.8, 0]));
     ob.traverse((o) => (o.castShadow = (o as THREE.Mesh).isMesh));
+    if (rift) {
+      const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.16), glow(RIFT_COLOR, 1.8));
+      crystal.position.y = 2.1;
+      crystal.scale.y = 1.5;
+      ob.add(crystal);
+    }
     PLATE_COLORS.forEach((c, i) => {
       const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(0.25) });
       const gem = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.14, 0.4), mat);
@@ -240,18 +256,25 @@ export class PlatesView {
 export class MiniPortalView {
   readonly group = new THREE.Group();
   private readonly swirl: THREE.Mesh;
+  private readonly ringMat: THREE.MeshBasicMaterial;
+  private readonly seals: THREE.MeshBasicMaterial[] = [];
+  private readonly color: number;
+  private awake = true;
   private time = Math.random() * 10;
 
   constructor(
     x: number,
     z: number,
     readonly link: PortalLink,
+    /** A sealed rift: shows its seal gems and stays dark until woken. */
+    sealed = false,
   ) {
-    const color = link.kind === 'pocket' ? 0xb060ff : 0x4ad8ff;
+    const color = (this.color = link.kind === 'pocket' ? RIFT_COLOR : 0x4ad8ff);
     this.group.position.set(x, groundAt(x, z), z);
     // Face the isometric camera.
     this.group.rotation.y = Math.PI / 4;
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.08, 8, 32), glow(color, 1.7));
+    this.ringMat = glow(color, 1.7);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.08, 8, 32), this.ringMat);
     ring.position.y = 0.95;
     ring.scale.y = 1.35;
     this.swirl = new THREE.Mesh(
@@ -262,11 +285,82 @@ export class MiniPortalView {
     this.swirl.scale.y = 1.35;
     const base = voxelBox([1.1, 0.1, 0.5], 0x4a4652, [0, 0.05, 0]);
     this.group.add(ring, this.swirl, base);
+    if (sealed) {
+      // Two standing stones, each with a seal gem that lights when its puzzle is solved.
+      for (const side of [-1, 1]) {
+        const stone = voxelBox([0.22, 1.5, 0.22], 0x4a4652, [side * 0.85, 0.75, 0]);
+        stone.castShadow = true;
+        const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(0.2) });
+        const gem = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.26), mat);
+        gem.position.set(side * 0.85, 1.35, 0);
+        this.seals.push(mat);
+        this.group.add(stone, gem);
+      }
+      this.setSeals(0, false);
+    }
+  }
+
+  /** Light `broken` seal gems; a woken rift swirls, a dormant one is a dark ring. */
+  setSeals(broken: number, awake: boolean): void {
+    this.seals.forEach((m, i) => m.color.setHex(this.color).multiplyScalar(i < broken ? 1.9 : 0.2));
+    if (awake === this.awake) return;
+    this.awake = awake;
+    this.swirl.visible = awake;
+    this.ringMat.color.setHex(awake ? this.color : 0x3a3446).multiplyScalar(awake ? 1.7 : 1);
   }
 
   update(dt: number): void {
     this.time += dt;
     this.swirl.rotation.z = this.time * 2.5;
     this.swirl.scale.x = 1 + Math.sin(this.time * 3) * 0.06;
+  }
+}
+
+/** The rift's brazier trial: stone braziers that burn violet when a hero touches them. */
+export class BraziersView {
+  readonly group = new THREE.Group();
+  private readonly flames: THREE.Mesh[] = [];
+  private readonly embers: THREE.MeshBasicMaterial[] = [];
+  private time = 0;
+  private flash = 0;
+
+  constructor(spots: readonly { x: number; z: number }[]) {
+    for (const p of spots) {
+      const g = new THREE.Group();
+      g.position.set(p.x, groundAt(p.x, p.z), p.z);
+      g.add(voxelBox([0.5, 0.15, 0.5], 0x4a4652, [0, 0.07, 0]), voxelBox([0.24, 0.6, 0.24], 0x5a5660, [0, 0.45, 0]), voxelBox([0.62, 0.18, 0.62], 0x3a3640, [0, 0.82, 0]));
+      g.traverse((o) => (o.castShadow = (o as THREE.Mesh).isMesh));
+      const ember = new THREE.MeshBasicMaterial({ color: 0x2a2030 });
+      const coals = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.05, 0.44), ember);
+      coals.position.y = 0.93;
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.6, 6), glow(RIFT_COLOR, 2));
+      flame.position.y = 1.2;
+      flame.visible = false;
+      this.embers.push(ember);
+      this.flames.push(flame);
+      g.add(coals, flame);
+      this.group.add(g);
+    }
+  }
+
+  /** The flames burned out before every brazier was lit. */
+  out(): void {
+    this.flash = 0.6;
+  }
+
+  /** `left`: fraction of the burn time remaining (1 when solved). */
+  update(dt: number, lit: readonly boolean[], left: number, solved: boolean): void {
+    this.time += dt;
+    this.flash = Math.max(0, this.flash - dt);
+    this.flames.forEach((f, i) => {
+      const on = solved || lit[i];
+      f.visible = on;
+      // Lit flames shrink as the time runs out.
+      const k = solved ? 1 : 0.35 + 0.65 * left;
+      f.scale.set(k, k * (1 + Math.sin(this.time * 14 + i * 2) * 0.15), k);
+      f.position.y = 0.95 + 0.3 * k;
+      f.rotation.y = this.time * 3 + i;
+      this.embers[i].color.setHex(on ? RIFT_COLOR : this.flash > 0 ? 0xff2a14 : 0x2a2030).multiplyScalar(on ? 1.2 : 1);
+    });
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CAPTURE_TIME, PlateSequence, newCapture, tickCapture } from '../src/systems/objectives';
+import { BrazierTrial, CAPTURE_TIME, PlateSequence, newCapture, tickCapture } from '../src/systems/objectives';
 
 const run = (c: ReturnType<typeof newCapture>, seconds: number, heroes: number, enemies: number) => {
   let done = false;
@@ -64,5 +64,37 @@ describe('plate sequence', () => {
     expect(s.press(1)).toBe('next');
     expect(s.press(2)).toBe('next');
     expect(s.press(0)).toBe('solved');
+  });
+});
+
+describe('brazier trial', () => {
+  it('is solved by lighting every brazier before the flames die', () => {
+    const t = new BrazierTrial(4, 6);
+    expect(t.light(2)).toBe('lit');
+    expect(t.left).toBe(6);
+    expect(t.light(2)).toBe('ignored');
+    t.tick(2);
+    expect(t.light(0)).toBe('lit');
+    // Lighting another doesn't restart the clock.
+    expect(t.left).toBe(4);
+    expect(t.light(3)).toBe('lit');
+    expect(t.light(1)).toBe('solved');
+    expect(t.solved).toBe(true);
+    expect(t.tick(100)).toBe(false);
+    expect(t.light(1)).toBe('ignored');
+  });
+
+  it('goes dark and starts over when time runs out', () => {
+    const t = new BrazierTrial(3, 5);
+    t.light(0);
+    t.light(1);
+    expect(t.tick(4.9)).toBe(false);
+    expect(t.tick(0.2)).toBe(true);
+    expect(t.litCount).toBe(0);
+    expect(t.left).toBe(0);
+    // The clock only runs while something is lit.
+    expect(t.tick(50)).toBe(false);
+    expect(t.light(2)).toBe('lit');
+    expect(t.left).toBe(5);
   });
 });

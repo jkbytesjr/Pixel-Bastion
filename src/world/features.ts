@@ -1,8 +1,9 @@
 /**
  * Floor features beyond rooms and corridors: a capture shrine that unlocks
- * the gates to the boss arena, mini-portals (a pocket dimension and a
- * shortcut), a pressure-plate puzzle that opens a vault, and cracked walls
- * hiding secret rooms. Pure logic on the tile grid, unit-tested.
+ * the gates to the boss arena, a hidden rift into another dimension (sealed
+ * until two puzzles are solved), a shortcut portal pair, a pressure-plate
+ * puzzle that opens a vault, and cracked walls hiding secret rooms. Pure
+ * logic on the tile grid, unit-tested.
  */
 import type { Rng } from '../core/rng';
 import { Tile, type TileGrid } from './grid';
@@ -32,7 +33,7 @@ export interface CaptureSite {
 /** Two linked mini-portals (world positions). */
 export interface PortalLink {
   id: number;
-  /** pocket: into a sealed pocket dimension and back. shortcut: between two distant rooms. */
+  /** pocket: the rift into a sealed pocket dimension and back. shortcut: between two distant rooms. */
   kind: 'pocket' | 'shortcut';
   a: Point;
   b: Point;
@@ -41,11 +42,29 @@ export interface PortalLink {
 /** Step on the plates in the order the obelisk shows. */
 export interface PlatePuzzle {
   id: number;
-  gateId: number;
+  /** The vault gate it opens, or null for one of the rift's seals. */
+  gateId: number | null;
   plates: Point[];
   /** Plate indices in the correct order. */
   order: number[];
   obelisk: Point;
+}
+
+/**
+ * The floor's hidden rift: a dormant portal in a secret room, held shut by
+ * two seals. One is a plate puzzle, the other a brazier trial (light every
+ * brazier before the first one burns out).
+ */
+export interface Rift {
+  /** The pocket portal it wakes. */
+  portalId: number;
+  /** The cracked wall hiding it. */
+  gateId: number;
+  /** Index into `puzzles` of its plate seal. */
+  puzzle: number;
+  braziers: Point[];
+  /** Seconds the braziers burn once the first is lit. */
+  burn: number;
 }
 
 export interface Features {
@@ -53,7 +72,11 @@ export interface Features {
   capture: CaptureSite | null;
   portals: PortalLink[];
   puzzles: PlatePuzzle[];
+  rift: Rift | null;
 }
+
+/** Hero walking speed (world units per second) the brazier timer is planned around. */
+const PLAN_SPEED = 5;
 
 export interface RoomLike {
   id: number;
@@ -235,21 +258,114 @@ export function addFeatures(input: FeatureInput): Features {
     return null;
   };
 
+  /** Three plates in `r`, spread apart and clear of `avoid`. */
+  const placePlates = (r: RoomLike, avoid: Point[]): Point[] | null => {
+    const plates: Point[] = [];
+    for (const s of rng.shuffle(openSpots(grid, r, 3, taken))) {
+      if (plates.length === 3) break;
+      if (plates.every((p) => Math.hypot(p.x - s.x, p.z - s.z) >= 4) && avoid.every((p) => Math.hypot(p.x - s.x, p.z - s.z) >= 2)) plates.push(s);
+    }
+    return plates.length === 3 ? plates : null;
+  };
+
+  // ---- The hidden rift: a dormant portal behind a cracked wall, two seals elsewhere ----
+  let rift: Rift | null = null;
+  const busy = new Set<RoomLike>([shrineRoom].filter(Boolean) as RoomLike[]);
+  {
+    // Hide it behind a wall of any reachable room (the quieter ones first).
+    let hidden: ReturnType<typeof carveBehind> = null;
+    for (const r of [...rng.shuffle(usable.filter((r) => !busy.has(r))), ...busy]) if ((hidden = carveBehind(r, 5, 5, 'secret'))) break;
+    if (hidden) taken.add(key(hidden.inside));
+    // The pocket dimension needs open void, away from everything else: as big as fits.
+    const spots: Point[] = [];
+    let size = 0;
+    for (const [s, margin] of [
+      [11, 3],
+      [9, 2],
+      [7, 2],
+    ]) {
+      if (!hidden || spots.length) break;
+      size = s;
+      for (let z = margin; z < grid.height - s - margin; z += 2)
+        for (let x = margin; x < grid.width - s - margin; x += 2) if (clearArea(grid, x, z, s, s, margin)) spots.push({ x, z });
+    }
+    // The plate seal: any fair-sized room with space for three plates around an obelisk.
+    let plateRoom: RoomLike | undefined;
+    let plates: Point[] | null = null;
+    if (spots.length)
+      for (const r of rng.shuffle(usable.filter((r) => !busy.has(r) && r.w >= 11 && r.h >= 11))) {
+        if ((plates = placePlates(r, [center(r)]))) {
+          plateRoom = r;
+          break;
+        }
+      }
+    // The brazier trial: one brazier near each corner of another room (or a big plate room).
+    let corners: Point[] = [];
+    if (plateRoom && plates) {
+      const plateSpots = [...plates, center(plateRoom)];
+      const options = rng.shuffle(usable.filter((r) => !busy.has(r) && r !== plateRoom && r.w >= 9 && r.h >= 9));
+      if (plateRoom.w >= 13 && plateRoom.h >= 13) options.push(plateRoom);
+      for (const r of options) {
+        corners = [];
+        for (const [fx, fz] of [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+        ]) {
+          // The free floor tile nearest the corner, two tiles in from the walls.
+          const want = { x: fx ? r.x + r.w - 2.5 : r.x + 2.5, z: fz ? r.z + r.h - 2.5 : r.z + 2.5 };
+          const best = openSpots(grid, r, 1, taken)
+            .filter((p) => plateSpots.every((q) => Math.hypot(q.x - p.x, q.z - p.z) >= 2) && Math.hypot(p.x - want.x, p.z - want.z) <= 2.3)
+            .sort((p, q) => Math.hypot(p.x - want.x, p.z - want.z) - Math.hypot(q.x - want.x, q.z - want.z))[0];
+          if (best) corners.push(best);
+        }
+        if (corners.length === 4) break;
+      }
+    }
+    if (hidden && plateRoom && plates && corners.length === 4) {
+      const at = rng.pick(spots);
+      grid.fillRect(at.x, at.z, size, size, Tile.Floor);
+      grid.buildWalls();
+      const pocket: RoomLike = { id: rooms.length, x: at.x, z: at.z, w: size, h: size, kind: 'pocket' };
+      rooms.push(pocket);
+      const gateId = nextGate++;
+      gates.push({ id: gateId, kind: 'secret', tiles: [hidden.gate] });
+      const portalAt = center(hidden.room);
+      const pc = center(pocket);
+      portals.push({ id: portals.length, kind: 'pocket', a: portalAt, b: { x: pc.x, z: pocket.z + size - 2.5 } });
+      input.addChest({ x: pc.x - 1.5, z: pocket.z + 2.5 }, true);
+      input.addChest({ x: pc.x + 1.5, z: pocket.z + 2.5 }, true);
+      input.addSpawns(pocket, [
+        { x: pc.x - 2, z: pc.z },
+        { x: pc.x + 2, z: pc.z },
+        { x: pc.x, z: pc.z - 1 },
+      ]);
+      const obelisk = center(plateRoom);
+      for (const p of [...plates, ...corners, obelisk, portalAt]) taken.add(key(p));
+      puzzles.push({ id: puzzles.length, gateId: null, plates, order: rng.shuffle([0, 1, 2]), obelisk });
+      // Long enough to run the corners (shortest way round: all but the longest side), with some slack.
+      const sides = corners.map((c, i) => Math.hypot(c.x - corners[(i + 1) % 4].x, c.z - corners[(i + 1) % 4].z));
+      const run = sides.reduce((a, b) => a + b, 0) - Math.max(...sides);
+      rift = { portalId: portals.length - 1, gateId, puzzle: puzzles.length - 1, braziers: corners, burn: Math.round((run / PLAN_SPEED) * 1.6 + 2) };
+      busy.add(plateRoom);
+      for (const r of usable) if (corners.some((c) => c.x > r.x && c.x < r.x + r.w && c.z > r.z && c.z < r.z + r.h)) busy.add(r);
+    } else if (hidden) {
+      // The rift couldn't be finished: what was carved is just a secret room.
+      gates.push({ id: nextGate++, kind: 'secret', tiles: [hidden.gate] });
+      input.addChest(center(hidden.room), true);
+    }
+  }
+
   // A plate puzzle in a big reachable room opens a vault behind its wall.
-  const puzzleRoom = rng.shuffle(usable.filter((r) => r.w >= 13 && r.h >= 13 && r !== shrineRoom))[0];
+  const puzzleRoom = rng.shuffle(usable.filter((r) => r.w >= 13 && r.h >= 13 && !busy.has(r)))[0];
   if (puzzleRoom && rng.chance(0.8)) {
     const vault = carveBehind(puzzleRoom, 5, 5, 'vault');
     if (vault) {
       const gateId = nextGate++;
       gates.push({ id: gateId, kind: 'vault', tiles: [vault.gate] });
-      const spots = rng.shuffle(openSpots(grid, puzzleRoom, 3, taken));
-      // Three plates spread out from each other.
-      const plates: Point[] = [];
-      for (const s of spots) {
-        if (plates.length === 3) break;
-        if (plates.every((p) => Math.hypot(p.x - s.x, p.z - s.z) >= 4)) plates.push(s);
-      }
-      if (plates.length === 3) {
+      const plates = placePlates(puzzleRoom, []);
+      if (plates) {
         for (const p of plates) taken.add(key(p));
         taken.add(key(vault.inside));
         puzzles.push({ id: puzzles.length, gateId, plates, order: rng.shuffle([0, 1, 2]), obelisk: vault.inside });
@@ -267,40 +383,15 @@ export function addFeatures(input: FeatureInput): Features {
 
   // One or two secret rooms behind cracked walls.
   const secretCount = rng.int(1, 2);
-  for (const r of rng.shuffle(usable.filter((x) => x !== shrineRoom && x !== puzzleRoom))) {
-    if (gates.filter((g) => g.kind === 'secret').length >= secretCount) break;
+  for (const r of rng.shuffle(usable.filter((x) => !busy.has(x) && x !== puzzleRoom))) {
+    if (gates.filter((g) => g.kind === 'secret' && g.id !== rift?.gateId).length >= secretCount) break;
     const secret = carveBehind(r, 5, 5, 'secret');
     if (!secret) continue;
     gates.push({ id: nextGate++, kind: 'secret', tiles: [secret.gate] });
     input.addChest(center(secret.room), true);
   }
 
-  // ---- A pocket dimension, reached by a mini-portal ----
   early = reachability(grid, start, { gatesOpen: false });
-  const size = 11;
-  const candidates: Point[] = [];
-  for (let z = 3; z < grid.height - size - 3; z += 3)
-    for (let x = 3; x < grid.width - size - 3; x += 3) if (clearArea(grid, x, z, size, size, 3)) candidates.push({ x, z });
-  const entryRooms = usable.filter((r) => r !== shrineRoom && reachable(r));
-  if (candidates.length && entryRooms.length) {
-    const at = rng.pick(candidates);
-    grid.fillRect(at.x, at.z, size, size, Tile.Floor);
-    grid.buildWalls();
-    const pocket: RoomLike = { id: rooms.length, x: at.x, z: at.z, w: size, h: size, kind: 'pocket' };
-    rooms.push(pocket);
-    const entry = rng.pick(entryRooms);
-    const spot = rng.pick(openSpots(grid, entry, 2, taken).filter((p) => Math.hypot(p.x - center(entry).x, p.z - center(entry).z) > 2.5)) ?? center(entry);
-    taken.add(key(spot));
-    const back = { x: center(pocket).x, z: pocket.z + size - 2.5 };
-    portals.push({ id: portals.length, kind: 'pocket', a: spot, b: back });
-    const pc = center(pocket);
-    input.addChest({ x: pc.x, z: pocket.z + 2.5 }, true);
-    input.addSpawns(pocket, [
-      { x: pc.x - 2, z: pc.z },
-      { x: pc.x + 2, z: pc.z },
-      { x: pc.x, z: pc.z - 1 },
-    ]);
-  }
 
   // ---- A shortcut between two far-apart rooms ----
   if (usable.length >= 3 && rng.chance(0.7)) {
@@ -316,5 +407,5 @@ export function addFeatures(input: FeatureInput): Features {
     }
   }
 
-  return { gates, capture, portals, puzzles };
+  return { gates, capture, portals, puzzles, rift };
 }

@@ -773,15 +773,15 @@ try {
   const puzzleFloor = await page.evaluate(() => {
     for (let d = 0; d < 8; d++) {
       window.__game.loadFloor(d);
-      if (window.__game.level.puzzles.length) return d;
+      if (window.__game.level.puzzles.some((p) => p.gateId !== null)) return d;
     }
     return -1;
   });
   if (puzzleFloor >= 0) {
     const pz = await page.evaluate(() => {
-      const p = window.__game.level.puzzles[0];
+      const p = window.__game.level.puzzles.find((x) => x.gateId !== null);
       const gate = window.__game.level.gates.find((g) => g.id === p.gateId).tiles[0];
-      return { plates: p.plates, order: p.order, gate };
+      return { plates: p.plates, order: p.order, gate, index: window.__game.level.puzzles.indexOf(p) };
     });
     await page.evaluate(() => {
       const w = window.__game.worldState;
@@ -795,7 +795,7 @@ try {
       await waitSim(0.15);
     };
     await step(pz.order[1]);
-    check((await page.evaluate(() => window.__game.worldState.features.snapshot().pz[0])) === 0, 'a plate out of order resets the puzzle');
+    check((await page.evaluate((i) => window.__game.worldState.features.snapshot().pz[i], pz.index)) === 0, 'a plate out of order resets the puzzle');
     for (const i of pz.order) await step(i);
     check(await page.evaluate((t) => window.__game.level.grid.isWalkable(t.x, t.z), pz.gate), 'the plates in the right order open the vault');
   } else check(false, 'found a floor with a plate puzzle');
@@ -821,13 +821,43 @@ try {
     check(await page.evaluate((t) => window.__game.level.grid.isWalkable(t.x, t.z), secret.t), 'striking a cracked wall reveals a secret passage');
   } else check(false, 'found a secret wall on the floor');
 
-  // Mini-portal: into the pocket dimension, and back out to exactly where we stepped in.
-  const link = await page.evaluate(() => window.__game.level.portals.find((p) => p.kind === 'pocket'));
+  // The hidden rift: dormant until its plate seal and brazier trial are both done.
+  const rift = await page.evaluate(() => {
+    const lvl = window.__game.level;
+    if (!lvl.rift) return null;
+    const seal = lvl.puzzles[lvl.rift.puzzle];
+    return { ...lvl.rift, plates: seal.plates, order: seal.order, portal: lvl.portals.find((p) => p.id === lvl.rift.portalId) };
+  });
+  const link = rift?.portal;
+  if (rift) {
+    const pos = () => page.evaluate(() => ({ ...window.__game.worldState.player.pos }));
+    await page.evaluate((l) => window.__game.debugTeleport(l.a.x, l.a.z), link);
+    await waitSim(0.4);
+    const still = await pos();
+    check(Math.hypot(still.x - link.a.x, still.z - link.a.z) < 0.3, 'the hidden rift stays dormant while its seals hold');
+    check(!(await page.evaluate(() => window.__game.worldState.features.markers().some((m) => m.color === '#b060ff' && m.size === 0.6 && Math.hypot(m.x - window.__game.level.portals.find((p) => p.id === window.__game.level.rift.portalId).a.x, m.z - window.__game.level.portals.find((p) => p.id === window.__game.level.rift.portalId).a.z) < 0.1))), 'the dormant rift is not on the minimap');
+    const touch = async (p) => {
+      await page.evaluate((q) => window.__game.debugTeleport(q.x, q.z), p);
+      await waitSim(0.25);
+      await page.evaluate((q) => window.__game.debugTeleport(q.x + 1.6, q.z + 1.6), p);
+      await waitSim(0.12);
+    };
+    for (const i of rift.order) await touch(rift.plates[i]);
+    check((await page.evaluate(() => window.__game.worldState.features.riftSeals)) === 1, 'the rift plates break the first seal');
+    await touch(rift.braziers[0]);
+    check((await page.evaluate(() => window.__game.worldState.features.brazierTrial.left)) > 0, 'lighting a brazier starts the clock');
+    await page.waitForSelector('.obj-meter:not(.hidden)', { timeout: 10000 }).catch(() => {});
+    check(await page.isVisible('.obj-meter'), 'the brazier countdown shows in the objective meter');
+    for (const b of rift.braziers.slice(1)) await touch(b);
+    check(await page.evaluate(() => window.__game.worldState.features.riftOpen), 'lighting every brazier in time breaks the second seal and wakes the rift');
+  } else check(false, 'the floor has a hidden rift');
+
+  // The rift: into another dimension, and back out to exactly where we stepped in.
   if (link) {
     await page.evaluate((l) => window.__game.debugTeleport(l.a.x, l.a.z), link);
     await waitSim(0.3);
     const inPocket = await page.evaluate((l) => Math.hypot(window.__game.worldState.player.pos.x - l.b.x, window.__game.worldState.player.pos.z - l.b.z) < 0.5, link);
-    check(inPocket, 'a mini-portal carries the hero into its pocket dimension');
+    check(inPocket, 'the woken rift carries the hero into another dimension');
     await waitSim(1);
     check(
       await page.evaluate((l) => Math.hypot(window.__game.worldState.player.pos.x - l.b.x, window.__game.worldState.player.pos.z - l.b.z) < 0.5, link),

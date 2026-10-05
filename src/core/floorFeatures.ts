@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import type { Dungeon } from '../world/dungeonGen';
 import { Tile } from '../world/grid';
 import type { Gate, PortalLink } from '../world/features';
-import { GateView, MiniPortalView, PlatesView, ShrineView } from '../entities/fixtures';
-import { PlateSequence, newCapture, tickCapture, CAPTURE_STATES, type Capture } from '../systems/objectives';
+import { BraziersView, GateView, MiniPortalView, PlatesView, ShrineView } from '../entities/fixtures';
+import { BrazierTrial, PlateSequence, newCapture, tickCapture, CAPTURE_STATES, type Capture } from '../systems/objectives';
 import { themeFor } from '../world/voxelBuilder';
 import type { Player } from '../entities/player';
 import type { Enemy } from '../entities/enemy';
@@ -14,6 +14,10 @@ import type { EnemyKind } from '../world/dungeonGen';
 const PORTAL_REACH = 0.65;
 /** Distance a hero must move away from a portal before it can carry them again. */
 const PORTAL_CLEAR = 1.5;
+/** How close a hero must come to a brazier to light it. */
+const BRAZIER_REACH = 0.8;
+/** Seals holding the rift shut: its plate puzzle and its brazier trial. */
+export const RIFT_SEALS = 2;
 /** Hits a cracked wall takes before it gives way. */
 const SECRET_HITS = 2;
 /** During a capture, monsters come at the shrine every few seconds. */
@@ -43,6 +47,9 @@ export interface FeatureState {
   g: number[];
   /** Plate puzzle steps. */
   pz: number[];
+  /** Brazier trial: lit braziers as bits, plus 256 once solved, and the seconds left. */
+  br: number;
+  bl: number;
 }
 
 /**
@@ -55,7 +62,12 @@ export class FloorFeatures {
   private shrine: ShrineView | null = null;
   private readonly gateViews = new Map<number, GateView>();
   private readonly openGates = new Set<number>();
-  private readonly puzzles: { seq: PlateSequence; view: PlatesView; gateId: number; plates: { x: number; z: number }[]; held: boolean[] }[] = [];
+  private readonly puzzles: { seq: PlateSequence; view: PlatesView; gateId: number | null; plates: { x: number; z: number }[]; held: boolean[] }[] = [];
+  private braziers: { trial: BrazierTrial; view: BraziersView; spots: { x: number; z: number }[]; held: boolean[] } | null = null;
+  /** The rift's cracked wall already glows (it woke). */
+  private riftHinted = false;
+  /** The local hero has been told this rift is dormant (until they walk away). */
+  private dormantTold = false;
   private readonly portals: { view: MiniPortalView; link: PortalLink; end: 'a' | 'b' }[] = [];
   private readonly secretHits = new Map<number, number>();
   /** Portal ends the local hero must step away from before they work again. */
@@ -75,6 +87,9 @@ export class FloorFeatures {
     this.openGates.clear();
     this.puzzles.length = 0;
     this.portals.length = 0;
+    this.braziers = null;
+    this.riftHinted = false;
+    this.dormantTold = false;
     this.secretHits.clear();
     this.returnTo.clear();
     this.portalLock = null;
@@ -90,17 +105,39 @@ export class FloorFeatures {
     this.shrine = level.capture ? new ShrineView(level.capture.x, level.capture.z, level.capture.radius) : null;
     if (this.shrine) this.group.add(this.shrine.group);
     for (const p of level.puzzles ?? []) {
-      const view = new PlatesView(p.plates, p.obelisk, p.order);
+      const view = new PlatesView(p.plates, p.obelisk, p.order, p.gateId === null);
       this.group.add(view.group);
       this.puzzles.push({ seq: new PlateSequence(p.order), view, gateId: p.gateId, plates: p.plates, held: p.plates.map(() => false) });
     }
     for (const link of level.portals ?? []) {
       for (const end of ['a', 'b'] as const) {
-        const view = new MiniPortalView(link[end].x, link[end].z, link);
+        const view = new MiniPortalView(link[end].x, link[end].z, link, end === 'a' && level.rift?.portalId === link.id);
         this.group.add(view.group);
         this.portals.push({ view, link, end });
       }
     }
+    if (level.rift) {
+      const view = new BraziersView(level.rift.braziers);
+      this.group.add(view.group);
+      this.braziers = { trial: new BrazierTrial(level.rift.braziers.length, level.rift.burn), view, spots: level.rift.braziers, held: level.rift.braziers.map(() => false) };
+    }
+  }
+
+  /** Seals of this floor's rift broken so far. */
+  get riftSeals(): number {
+    const rift = this.world.level.rift;
+    if (!rift) return 0;
+    return (this.puzzles[rift.puzzle]?.seq.solved ? 1 : 0) + (this.braziers?.trial.solved ? 1 : 0);
+  }
+
+  /** The rift's brazier trial (null if the floor has no rift). */
+  get brazierTrial(): BrazierTrial | null {
+    return this.braziers?.trial ?? null;
+  }
+
+  /** Has this floor's rift woken (both seals broken)? */
+  get riftOpen(): boolean {
+    return !!this.world.level.rift && this.riftSeals >= RIFT_SEALS;
   }
 
   get hasShrine(): boolean {
@@ -118,13 +155,25 @@ export class FloorFeatures {
     if (authority) {
       this.updateCapture(dt);
       this.updatePlates();
+      this.updateBraziers(dt);
     }
     for (const v of this.gateViews.values()) v.update(dt);
     this.puzzles.forEach((p) => {
       p.view.update(dt, p.seq.step, p.seq.solved);
-      this.gateViews.get(p.gateId)?.setProgress(p.seq.solved ? 3 : p.seq.step);
+      if (p.gateId !== null) this.gateViews.get(p.gateId)?.setProgress(p.seq.solved ? 3 : p.seq.step);
     });
     if (this.shrine) this.shrine.update(dt, this.capture.state, this.capture.progress);
+    const rift = this.world.level.rift;
+    if (rift) {
+      const b = this.braziers!;
+      b.view.update(dt, b.trial.lit, b.trial.burn ? b.trial.left / b.trial.burn : 0, b.trial.solved);
+      const open = this.riftOpen;
+      for (const p of this.portals) if (p.link.id === rift.portalId) p.view.setSeals(this.riftSeals, open || p.end === 'b');
+      if (open && !this.riftHinted) {
+        this.riftHinted = true;
+        this.gateViews.get(rift.gateId)?.hint();
+      }
+    }
     for (const p of this.portals) p.view.update(dt);
     this.updatePortals();
   }
@@ -235,12 +284,46 @@ export class FloorFeatures {
           } else if (result === 'next') this.world.events.emit('plate', { x: plate.x, z: plate.z, ok: true });
           else if (result === 'solved') {
             this.world.events.emit('plate', { x: plate.x, z: plate.z, ok: true });
-            this.world.events.emit('puzzleSolved', { x: plate.x, z: plate.z });
-            this.openGate(pz.gateId);
+            if (pz.gateId === null) this.sealBroken(plate.x, plate.z);
+            else {
+              this.world.events.emit('puzzleSolved', { x: plate.x, z: plate.z });
+              this.openGate(pz.gateId);
+            }
           }
         }
         pz.held[i] = on;
       });
+    }
+  }
+
+  // ---- The rift's seals ----
+
+  private updateBraziers(dt: number): void {
+    const b = this.braziers;
+    if (!b || b.trial.solved) return;
+    if (b.trial.tick(dt)) {
+      b.view.out();
+      const c = b.spots[0];
+      this.world.events.emit('braziersOut', { x: c.x, z: c.z });
+    }
+    b.spots.forEach((spot, i) => {
+      const on = this.world.heroes.some((h) => h.alive && Math.hypot(h.pos.x - spot.x, h.pos.z - spot.z) < BRAZIER_REACH);
+      if (on && !b.held[i]) {
+        const result = b.trial.light(i);
+        if (result !== 'ignored') this.world.events.emit('brazier', { x: spot.x, z: spot.z, lit: b.trial.litCount, total: b.spots.length, burn: b.trial.burn });
+        if (result === 'solved') this.sealBroken(spot.x, spot.z);
+      }
+      b.held[i] = on;
+    });
+  }
+
+  private sealBroken(x: number, z: number): void {
+    const rift = this.world.level.rift;
+    if (!rift) return;
+    this.world.events.emit('riftSeal', { x, z, seals: this.riftSeals, total: RIFT_SEALS });
+    if (this.riftOpen) {
+      const at = this.world.level.portals.find((p) => p.id === rift.portalId)!.a;
+      this.world.events.emit('riftOpen', { x: at.x, z: at.z });
     }
   }
 
@@ -254,9 +337,18 @@ export class FloorFeatures {
       if (Math.hypot(x - this.portalLock.x, z - this.portalLock.z) > PORTAL_CLEAR) this.portalLock = null;
       else return;
     }
+    const riftId = this.world.level.rift?.portalId;
+    let nearDormant = false;
     for (const { link, end } of this.portals) {
       const here = link[end];
       if (Math.hypot(x - here.x, z - here.z) > PORTAL_REACH) continue;
+      if (link.id === riftId && end === 'a' && !this.riftOpen) {
+        // Still sealed: say so once per visit.
+        nearDormant = true;
+        if (!this.dormantTold) this.world.events.emit('riftDormant', { seals: this.riftSeals, total: RIFT_SEALS });
+        this.dormantTold = true;
+        continue;
+      }
       const other = end === 'a' ? link.b : link.a;
       let dest = other;
       if (link.kind === 'pocket') {
@@ -273,6 +365,7 @@ export class FloorFeatures {
       this.world.events.emit('warp', { x: dest.x, z: dest.z, pocket: link.kind === 'pocket' && end === 'a' });
       return;
     }
+    if (!nearDormant) this.dormantTold = false;
   }
 
   // ---- Co-op ----
@@ -283,6 +376,8 @@ export class FloorFeatures {
       cs: CAPTURE_STATES.indexOf(this.capture.state),
       g: [...this.openGates],
       pz: this.puzzles.map((p) => (p.seq.solved ? p.seq.order.length : p.seq.step)),
+      br: this.braziers ? this.braziers.trial.lit.reduce((m, on, i) => m | (on ? 1 << i : 0), 0) | (this.braziers.trial.solved ? 256 : 0) : 0,
+      bl: this.braziers ? Math.round(this.braziers.trial.left * 10) / 10 : 0,
     };
   }
 
@@ -297,14 +392,25 @@ export class FloorFeatures {
       p.seq.step = Math.min(step, p.seq.order.length);
       p.seq.solved = step >= p.seq.order.length;
     });
+    const b = this.braziers;
+    if (b) {
+      b.trial.lit.forEach((_, i) => (b.trial.lit[i] = !!(s.br & (1 << i))));
+      b.trial.solved = !!(s.br & 256);
+      b.trial.left = s.bl;
+    }
   }
 
-  /** For the minimap: shrine, portals and closed gates. */
+  /** For the minimap: shrine, portals (the rift once woken) and closed gates. */
   markers(): { x: number; z: number; color: string; size: number }[] {
     const out: { x: number; z: number; color: string; size: number }[] = [];
     const site = this.world.level.capture;
     if (site) out.push({ x: site.x, z: site.z, color: this.capture.state === 'captured' ? '#4ad8ff' : '#ffd23f', size: 0.9 });
-    for (const { link, end } of this.portals) out.push({ x: link[end].x, z: link[end].z, color: link.kind === 'pocket' ? '#b060ff' : '#4ad8ff', size: 0.6 });
+    const riftId = this.world.level.rift?.portalId;
+    for (const { link, end } of this.portals) {
+      // The rift stays a secret until it wakes.
+      if (link.id === riftId && end === 'a' && !this.riftOpen) continue;
+      out.push({ x: link[end].x, z: link[end].z, color: link.kind === 'pocket' ? '#b060ff' : '#4ad8ff', size: 0.6 });
+    }
     for (const g of this.world.level.gates ?? [])
       if (!this.openGates.has(g.id) && g.kind !== 'secret') for (const t of g.tiles) out.push({ x: t.x + 0.5, z: t.z + 0.5, color: '#ff4a3a', size: 0.45 });
     return out;

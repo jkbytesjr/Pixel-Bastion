@@ -1,4 +1,4 @@
-/** Capture shrines and plate puzzles. Pure logic, unit-tested. */
+/** Capture shrines, plate puzzles and brazier trials. Pure logic, unit-tested. */
 
 export type CaptureState = 'idle' | 'capturing' | 'contested' | 'captured';
 export const CAPTURE_STATES: readonly CaptureState[] = ['idle', 'capturing', 'contested', 'captured'];
@@ -69,5 +69,51 @@ export class PlateSequence {
       return 'solved';
     }
     return 'next';
+  }
+}
+
+export type BrazierResult = 'lit' | 'solved' | 'ignored';
+
+/**
+ * Light every brazier before the flames die: the first one lit starts the
+ * clock, and if it runs out they all go dark and the trial starts over.
+ */
+export class BrazierTrial {
+  readonly lit: boolean[];
+  /** Seconds left before the lit braziers burn out (0 while none are lit). */
+  left = 0;
+  solved = false;
+
+  constructor(
+    count: number,
+    readonly burn: number,
+  ) {
+    this.lit = new Array<boolean>(count).fill(false);
+  }
+
+  get litCount(): number {
+    return this.lit.filter(Boolean).length;
+  }
+
+  light(i: number): BrazierResult {
+    if (this.solved || this.lit[i]) return 'ignored';
+    if (!this.litCount) this.left = this.burn;
+    this.lit[i] = true;
+    if (this.lit.every(Boolean)) {
+      this.solved = true;
+      this.left = 0;
+      return 'solved';
+    }
+    return 'lit';
+  }
+
+  /** Returns true on the tick the flames burn out. */
+  tick(dt: number): boolean {
+    if (this.solved || !this.litCount) return false;
+    this.left -= dt;
+    if (this.left > 0) return false;
+    this.left = 0;
+    this.lit.fill(false);
+    return true;
   }
 }

@@ -11,7 +11,7 @@ import type { ArmorItem, Drop, WeaponItem } from '../systems/loot';
 import { PERK_IDS, type PerkCounts } from '../systems/perks';
 
 /** Bump when messages change; peers on different versions can't play together. */
-export const NET_VERSION = 2;
+export const NET_VERSION = 3;
 export const MAX_PLAYERS = 4;
 /** The host is always player 0. */
 export const HOST_ID = 0;

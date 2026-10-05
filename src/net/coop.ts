@@ -55,6 +55,10 @@ const FORWARDED: (keyof GameEvents)[] = [
   'secretFound',
   'plate',
   'puzzleSolved',
+  'brazier',
+  'braziersOut',
+  'riftSeal',
+  'riftOpen',
 ];
 
 /** What the session needs from the game. */

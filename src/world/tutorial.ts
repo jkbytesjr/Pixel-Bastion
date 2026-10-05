@@ -59,6 +59,7 @@ export function buildTutorial(): Dungeon {
     capture: null,
     portals: [],
     puzzles: [],
+    rift: null,
   };
 }
 

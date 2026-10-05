@@ -19,7 +19,7 @@ Nothing is pre-made: dungeon layouts, character models, loot and sound effects a
 - **Real-time combat**: mouse-aimed melee and bow attacks, a dodge roll with brief invulnerability, a ground slam, a spear volley and health potions.
 - **Loot** in four rarities (common, rare, unique, mythic) with random stat modifiers. Unique and mythic weapons carry special powers like Chain Lightning and Ignite. Your equipped armor and weapon show on your character.
 - **Level-up choices**: each level offers three random attributes to pick from. The choice waits until you're out of combat (or press L), so it never interrupts a fight. Levels come faster the deeper you go.
-- **Shrines, gates and secrets**: capture each floor's shrine (stand in its circle while monsters try to contest it) to open the gates to the boss. Mini-portals lead to sealed pocket dimensions and back, pressure-plate puzzles open vaults, and cracked walls hide secret rooms full of loot.
+- **Shrines, gates and secrets**: capture each floor's shrine (stand in its circle while monsters try to contest it) to open the gates to the boss. Every floor hides one rift into another dimension, sealed until you solve two puzzles. Pressure-plate puzzles open vaults, and cracked walls hide secret rooms full of loot.
 - **Tactical combat**: dodge rolls use stamina, monsters are exposed for extra damage right after they attack, high ground adds 20% damage, and every monster and boss has elemental weaknesses and resistances to exploit with weapon powers. Monsters flank, take turns, sidestep your shots and pounce on openings.
 - **Online co-op**: play with up to 3 friends. One player hosts and shares a room code or invite link, and everyone fights through the same dungeon together. No server or sign-up needed.
 - **Tutorial**: a short six-room walkthrough of moving, fighting, dodging, abilities, loot and a boss. New runs offer it first.
@@ -107,7 +107,11 @@ Each floor is a set of rooms joined by corridors, ending in a boss arena. Killin
 
 **Each floor.** Find the shrine and capture it to open the gates sealing the boss arena. Stand inside its circle until the meter fills; any monster in the circle contests it, and more climb out of the floor while you capture. Along the way:
 
-- A purple mini-portal leads to a pocket dimension with an elite pack and a rich chest. Its return portal puts you back exactly where you stepped in.
+- **The hidden rift.** Every floor hides one rift into another dimension, behind a cracked wall. It stays dormant until you break its two seals:
+  - **Rift plates:** step on three plates in the order shown by an obelisk crowned with a violet crystal.
+  - **Brazier trial:** touch the four violet braziers in one room to light them. The first one starts a clock, and if it runs out they all go dark.
+
+  When both seals break, the rift's wall glows violet and the rift shows up on the minimap. It leads to a pocket dimension with an elite pack and two rich chests, and the way back puts you exactly where you stepped in.
 - Three coloured pressure plates open a vault. The obelisk beside the vault door blinks their order, and a wrong plate resets them.
 - A faintly glowing crack marks a hidden wall. Strike it twice to break through to a secret room.
 - A cyan portal pair, on some floors, is a shortcut between distant rooms.

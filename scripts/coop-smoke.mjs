@@ -77,6 +77,17 @@ try {
     await waitFor(guest, (t) => window.__game.level.grid.isWalkable(t.x, t.z), gateTile);
     check((await g(guest, () => window.__game.worldState.features.capture.state)) === 'captured', "the host's capture opens the gate for the guest too");
   } else check(false, 'the co-op floor has a boss gate');
+  // The hidden rift wakes for everyone once the host's side breaks both seals.
+  if (await g(host, () => !!window.__game.level.rift)) {
+    check(!(await g(guest, () => window.__game.worldState.features.riftOpen)), "the guest's rift starts sealed");
+    await g(host, () => {
+      const f = window.__game.worldState.features;
+      f.puzzles[window.__game.level.rift.puzzle].seq.solved = true;
+      f.brazierTrial.solved = true;
+    });
+    await waitFor(guest, () => window.__game.worldState.features.riftOpen);
+    check(true, "breaking the rift's seals on the host wakes it for the guest");
+  } else check(false, 'the co-op floor has a hidden rift');
 
   check(true, "the host knows the guest's name");
   await waitFor(guest, () => !!document.querySelector('.party-list:not(.hidden)'));
